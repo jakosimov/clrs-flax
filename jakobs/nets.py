@@ -88,7 +88,6 @@ class NetFlax(nnx.Module):
         nb_dims: dict[int, dict[str, int]] = {},
         nb_msg_passing_steps=1,
         debug=False,
-        algorithm_index=-1,
     ):
         """Constructs a `Net`."""
         super().__init__()
@@ -111,12 +110,56 @@ class NetFlax(nnx.Module):
         self.decoders: List[Dict[str, Decoder]] = decoders
         self.processor = self.processor_factory(self.hidden_dim, rngs)
 
-        if algorithm_index == -1:
-            self.algorithm_indices = range(len(specs.CLRS_30_ALGS))
-        else:
-            self.algorithm_indices = [algorithm_index]
+        self.algorithm_indices: List[int] = list(range(len(spec)))
 
         self.dropout = nnx.Dropout(rate=self._dropout_prob, rngs=rngs)
+
+    def _construct_encoders_decoders(
+        self, rngs: nnx.Rngs
+    ) -> Tuple[List[dict[str, Encoder]], List[dict[str, Decoder]]]:
+        """Constructs encoders and decoders, separate for each algorithm."""
+        encoders_: list[dict[str, Encoder]] = []
+        decoders_: list[dict[str, Decoder]] = []
+        enc_algo_idx = None
+        for algo_idx, spec in enumerate(self.spec):
+            enc: dict[str, Encoder] = {}
+            dec: dict[str, Decoder] = {}
+            for name, (stage, loc, t) in spec.items():
+                if stage == _Stage.INPUT or (
+                    stage == _Stage.HINT and self.encode_hints
+                ):
+                    # Build input encoders.
+                    if name == specs.ALGO_IDX_INPUT_NAME:
+                        if enc_algo_idx is None:
+                            enc_algo_idx = OneWayEncoder(self.hidden_dim, rngs=rngs)
+                        enc[name] = enc_algo_idx
+                    else:
+                        enc[name] = encoders.construct_encoders_flax(
+                            stage,
+                            loc,
+                            t,
+                            hidden_dim=self.hidden_dim,
+                            init=self.encoder_init,
+                            name=f"algo_{algo_idx}_{name}",
+                            rngs=rngs,
+                        )
+
+                if stage == _Stage.OUTPUT or (
+                    stage == _Stage.HINT and self.decode_hints
+                ):
+                    # Build output decoders.
+                    dec[name] = decoders.construct_decoders_flax(
+                        loc,
+                        t,
+                        hidden_dim=self.hidden_dim,
+                        nb_dims=self.nb_dims[algo_idx][name],
+                        name=f"algo_{algo_idx}_{name}",
+                        rngs=rngs,
+                    )
+            encoders_.append(enc)
+            decoders_.append(dec)
+
+        return encoders_, decoders_
 
     def __call__(
         self,
@@ -156,13 +199,7 @@ class NetFlax(nnx.Module):
           for the selected algorithm.
         """
 
-        if algorithm_index == -1:
-            # We are initialising the parameters of the module or the
-            # message-passing state.
-            algorithm_indices = self.algorithm_indices
-        else:
-            # We are processing a single algorithm.
-            algorithm_indices = [algorithm_index]
+        algorithm_indices: List[int] = [algorithm_index]
 
         assert len(algorithm_indices) == len(features_list)
 
@@ -223,11 +260,6 @@ class NetFlax(nnx.Module):
             lean_mp_state,
             accum_mp_state,
         )
-
-        def invert(d):
-            """Dict of lists -> list of dicts."""
-            if d:
-                return [dict(zip(d, i)) for i in zip(*d.values())]
 
         if return_all_outputs:
             output_preds = {
@@ -358,53 +390,6 @@ class NetFlax(nnx.Module):
         # the second value is the output that will be stacked over steps.
         return new_mp_state, accum_mp_state
 
-    def _construct_encoders_decoders(
-        self, rngs: nnx.Rngs
-    ) -> Tuple[List[dict[str, Encoder]], List[dict[str, Decoder]]]:
-        """Constructs encoders and decoders, separate for each algorithm."""
-        encoders_: list[dict[str, Encoder]] = []
-        decoders_: list[dict[str, Decoder]] = []
-        enc_algo_idx = None
-        for algo_idx, spec in enumerate(self.spec):
-            enc: dict[str, Encoder] = {}
-            dec: dict[str, Decoder] = {}
-            for name, (stage, loc, t) in spec.items():
-                if stage == _Stage.INPUT or (
-                    stage == _Stage.HINT and self.encode_hints
-                ):
-                    # Build input encoders.
-                    if name == specs.ALGO_IDX_INPUT_NAME:
-                        if enc_algo_idx is None:
-                            enc_algo_idx = OneWayEncoder(self.hidden_dim, rngs=rngs)
-                        enc[name] = enc_algo_idx
-                    else:
-                        enc[name] = encoders.construct_encoders_flax(
-                            stage,
-                            loc,
-                            t,
-                            hidden_dim=self.hidden_dim,
-                            init=self.encoder_init,
-                            name=f"algo_{algo_idx}_{name}",
-                            rngs=rngs,
-                        )
-
-                if stage == _Stage.OUTPUT or (
-                    stage == _Stage.HINT and self.decode_hints
-                ):
-                    # Build output decoders.
-                    dec[name] = decoders.construct_decoders_flax(
-                        loc,
-                        t,
-                        hidden_dim=self.hidden_dim,
-                        nb_dims=self.nb_dims[algo_idx][name],
-                        name=f"algo_{algo_idx}_{name}",
-                        rngs=rngs,
-                    )
-            encoders_.append(enc)
-            decoders_.append(dec)
-
-        return encoders_, decoders_
-
     def _one_step_pred(
         self,
         inputs: _Trajectory,
@@ -509,3 +494,9 @@ def _is_not_done_broadcast(lengths, i, tensor) -> Array:
     ):  # pytype: disable=attribute-error  # numpy-scalars
         is_not_done: jax.Array = jnp.expand_dims(is_not_done, -1)
     return is_not_done
+
+
+def invert(d):
+    """Dict of lists -> list of dicts."""
+    if d:
+        return [dict(zip(d, i)) for i in zip(*d.values())]

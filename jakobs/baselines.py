@@ -150,8 +150,6 @@ class BaselineModel(model.Model):
         decode_hints: bool = True,
         encoder_init: EncoderInitialiser = EncoderInitialiser.DEFAULT,
         use_lstm: bool = False,
-        learning_rate: float = 0.005,
-        grad_clip_max_norm: float = 0.0,
         checkpoint_path: str = "/tmp/clrs3",
         freeze_processor: bool = False,
         dropout_prob: float = 0.0,
@@ -220,25 +218,16 @@ class BaselineModel(model.Model):
         self.checkpoint_path = checkpoint_path
         self.name = name
         self._freeze_processor = freeze_processor
-        if grad_clip_max_norm != 0.0:
-            optax_chain = [
-                optax.clip_by_global_norm(grad_clip_max_norm),
-                optax.scale_by_adam(),
-                optax.scale(-learning_rate),
-            ]
-            self.opt = optax.chain(*optax_chain)
-        else:
-            self.opt = optax.adam(learning_rate)
 
         self.nb_msg_passing_steps = nb_msg_passing_steps
         self.debug = debug
 
-        self.nb_dims = []
+        self.nb_dims: list[dict[str, int]] = []
         if isinstance(dummy_trajectory, _Feedback):
             assert len(self._spec) == 1
             dummy_trajectory = [dummy_trajectory]
         for traj in dummy_trajectory:
-            nb_dims = {}
+            nb_dims: dict[str, int] = {}
             for inp in traj.features.inputs:
                 nb_dims[inp.name] = inp.data.shape[-1]
             for hint in traj.features.hints:
@@ -263,10 +252,6 @@ class BaselineModel(model.Model):
             debug=self.debug,
             rngs=rngs,
         )
-
-        self._device_params = None
-        self._device_opt_state = None
-        self.opt_state_skeleton = None
 
     def predict(
         self,
@@ -372,57 +357,6 @@ class BaselineModel(model.Model):
             rng_key=rng_keys, feedback=feedback, algorithm_index=algorithm_index
         )
         return loss
-
-        # def _create_net_fns(
-
-    #     self,
-    #     hidden_dim,
-    #     encode_hints,
-    #     processor_factory,
-    #     use_lstm,
-    #     encoder_init,
-    #     dropout_prob,
-    #     hint_teacher_forcing,
-    #     hint_repred_mode,
-    #     rngs,
-    # ):
-    #     """Creates the processor network for the model."""
-
-    #     self.net = nets.NetFlax(
-    #         spec=self._spec,
-    #         hidden_dim=hidden_dim,
-    #         encode_hints=encode_hints,
-    #         decode_hints=self.decode_hints,
-    #         processor_factory=processor_factory,
-    #         # use_lstm=use_lstm,
-    #         encoder_init=encoder_init,
-    #         dropout_prob=dropout_prob,
-    #         hint_teacher_forcing=hint_teacher_forcing,
-    #         hint_repred_mode=hint_repred_mode,
-    #         nb_dims=self.nb_dims,
-    #         nb_msg_passing_steps=self.nb_msg_passing_steps,
-    #         debug=self.debug,
-    #         rngs=rngs,
-    #     )
-    # pmap_args = dict(axis_name="batch", devices=jax.local_devices())
-    # n_devices = jax.local_device_count()
-    # func, static_arg, extra_args = (
-    #     (jax.jit, "static_argnums", {})
-    #     if n_devices == 1
-    #     else (jax.pmap, "static_broadcasted_argnums", pmap_args)
-    # )
-    # pmean = functools.partial(jax.lax.pmean, axis_name="batch")
-    # self._maybe_pmean = pmean if n_devices > 1 else lambda x: x
-    # extra_args[static_arg] = 3
-    # self.jitted_grad = func(self._compute_grad, **extra_args)
-    # extra_args[static_arg] = 4
-    # self.jitted_feedback = func(self._feedback, donate_argnums=[0, 3], **extra_args)
-    # extra_args[static_arg] = [3, 4, 5]
-    # self.jitted_predict = func(self._predict, **extra_args)
-    # extra_args[static_arg] = [3, 4]
-    # self.jitted_accum_opt_update = func(
-    #     accum_opt_update, donate_argnums=[0, 2], **extra_args
-    # )
 
     # def init(self, features: Union[_Features, List[_Features]], seed: _Seed):
     #     if not isinstance(features, list):
@@ -551,26 +485,6 @@ class BaselineModel(model.Model):
     #             )
 
     #     return losses_
-
-    # def restore_model(self, file_name: str, only_load_processor: bool = False):
-    #     """Restore model from `file_name`."""
-    #     path = os.path.join(self.checkpoint_path, file_name)
-    #     with open(path, "rb") as f:
-    #         restored_state = pickle.load(f)
-    #         if only_load_processor:
-    #             restored_params = _filter_in_processor(restored_state["params"])
-    #         else:
-    #             restored_params = restored_state["params"]
-    #         self.params = hk.data_structures.merge(self.params, restored_params)
-    #         self.opt_state = restored_state["opt_state"]
-
-    # def save_model(self, file_name: str):
-    #     """Save model (processor weights only) to `file_name`."""
-    #     os.makedirs(self.checkpoint_path, exist_ok=True)
-    #     to_save = {"params": self.params, "opt_state": self.opt_state}
-    #     path = os.path.join(self.checkpoint_path, file_name)
-    #     with open(path, "wb") as f:
-    #         pickle.dump(to_save, f)
 
 
 def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
