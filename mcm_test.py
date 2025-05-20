@@ -141,23 +141,12 @@ def _():
     import jax.random as random
 
     mpnn_processor_factory = processors.get_processor_factory(
-        "mpnn", use_ln=True, nb_triplet_fts=32, nb_heads=4
-    )
-    mpnn_model_params = dict(
-        processor_factory=mpnn_processor_factory,
-        hidden_dim=32,
-        encode_hints=True,
-        decode_hints=True,
-        use_lstm=False,
-        learning_rate=0.001,
-        checkpoint_path="/tmp/checkpt",
-        freeze_processor=False,
-        dropout_prob=0.0,
+        processors.ProcessorKind.MPNN, use_ln=True, nb_triplet_fts=32, nb_heads=4
     )
 
 
     # mpnn_model.init(dummy_trajectory.features, 1234)
-    return baselines, mpnn_model_params, nnx, random
+    return baselines, mpnn_processor_factory, nnx, random
 
 
 @app.cell
@@ -205,7 +194,7 @@ def _(clrs, jax, nnx, rng):
 def _(
     baselines,
     dummy_trajectory,
-    mpnn_model_params,
+    mpnn_processor_factory,
     nnx,
     random,
     spec,
@@ -215,6 +204,19 @@ def _(
 ):
     rngs = nnx.Rngs(params=0, dropout=random.key(1))
 
+    mpnn_model_params = dict(
+        processor_factory=mpnn_processor_factory,
+        hidden_dim=32,
+        encode_hints=True,
+        decode_hints=True,
+        use_lstm=False,
+        # learning_rate=0.001,
+        checkpoint_path="/tmp/checkpt",
+        freeze_processor=False,
+        dropout_prob=0.0,
+    )
+
+
     mpnn_model = baselines.BaselineModel(
         spec=spec,
         dummy_trajectory=dummy_trajectory,
@@ -222,17 +224,30 @@ def _(
         **mpnn_model_params,
     )
 
-
     import optax
-    optimizer = nnx.Optimizer(mpnn_model, optax.adam(1e-2))
+
+    learning_rate = 1e-3
+
+    grad_clip_max_norm = 0.0
+    if grad_clip_max_norm != 0.0:
+        optax_chain = [
+            optax.clip_by_global_norm(grad_clip_max_norm),
+            optax.scale_by_adam(),
+            optax.scale(-learning_rate),
+        ]
+        opt = optax.chain(*optax_chain)
+    else:
+        opt = optax.adam(learning_rate)
+
+    optimizer = nnx.Optimizer(mpnn_model, opt)
     train_model(
-        mpnn_model, train_sampler, test_sampler, optimizer, max_steps=1000
-    )
-    return
+        mpnn_model, train_sampler, test_sampler, optimizer, max_steps=100
+    );
+    return (learning_rate,)
 
 
 @app.cell
-def _(clrs, dummy_trajectory, spec):
+def _(clrs, dummy_trajectory, learning_rate, spec):
     old_mpnn_processor_factory = clrs.get_processor_factory('mpnn', use_ln=True, nb_triplet_fts=32, nb_heads=4)
     old_mpnn_model_params = dict(
         processor_factory=old_mpnn_processor_factory,
@@ -240,7 +255,7 @@ def _(clrs, dummy_trajectory, spec):
         encode_hints=True,
         decode_hints=True,
         use_lstm=False,
-        learning_rate=0.001,
+        learning_rate=learning_rate,
         checkpoint_path='/tmp/checkpt',
         freeze_processor=False,
         dropout_prob=0.0,
@@ -282,7 +297,7 @@ def _(clrs, jax, rng):
 
 @app.cell
 def _(old_mpnn_model, old_train_model, test_sampler, train_sampler):
-    old_train_model(old_mpnn_model, train_sampler, test_sampler, max_steps=1000)
+    old_train_model(old_mpnn_model, train_sampler, test_sampler, max_steps=100)
     return
 
 
