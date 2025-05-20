@@ -21,13 +21,12 @@ from typing import Dict, List, Optional, Union
 from clrs._src import probing
 from clrs._src import samplers
 from clrs._src import specs
-from flax.nnx import Module
 
 
 Result = Dict[str, probing.DataPoint]
 
 
-class Model(Module):
+class Model(abc.ABC):
     """Abstract base class for CLRS3-B models."""
 
     def __init__(self, spec: Union[specs.Spec, List[specs.Spec]]):

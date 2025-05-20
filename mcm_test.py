@@ -245,6 +245,10 @@ def _(
         rngs=rngs,
         **mpnn_model_params,
     )
+
+    for path, module in mpnn_model.iter_modules():
+        print(path, type(module).__name__)
+
     optimizer = nnx.Optimizer(mpnn_model, opt)
     train_model(
         mpnn_model,

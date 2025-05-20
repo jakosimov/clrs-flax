@@ -136,7 +136,7 @@ def print_value(name, x):
     return x
 
 
-class BaselineModel(model.Model):
+class BaselineModel(nnx.Module, model.Model):
     """Model implementation with selectable message passing algorithm."""
 
     def __init__(
