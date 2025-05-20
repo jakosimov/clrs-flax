@@ -85,7 +85,7 @@ class NetFlax(nnx.Module):
         hint_teacher_forcing: float,
         rngs: nnx.Rngs,
         hint_repred_mode: HintRepredMode = HintRepredMode.SOFT,
-        nb_dims: dict[int, dict[str, int]] = {},
+        nb_dims: list[dict[str, int]] = [],
         nb_msg_passing_steps=1,
         debug=False,
     ):
@@ -100,7 +100,7 @@ class NetFlax(nnx.Module):
         self.encode_hints: bool = encode_hints
         self.decode_hints: bool = decode_hints
         self.processor_factory = processor_factory
-        self.nb_dims: Dict[int, Dict[str, int]] = nb_dims
+        self.nb_dims: list[dict[str, int]] = nb_dims
         self.encoder_init: EncoderInitialiser = encoder_init
         self.nb_msg_passing_steps: int = nb_msg_passing_steps
         self.debug: bool = debug
@@ -108,7 +108,9 @@ class NetFlax(nnx.Module):
         encoders, decoders = self._construct_encoders_decoders(rngs)
         self.encoders: List[Dict[str, Encoder]] = encoders
         self.decoders: List[Dict[str, Decoder]] = decoders
-        self.processor = self.processor_factory(self.hidden_dim, rngs)
+        self.processor: processors.Processor = self.processor_factory(
+            self.hidden_dim, rngs
+        )
 
         self.algorithm_indices: List[int] = list(range(len(spec)))
 
@@ -199,62 +201,57 @@ class NetFlax(nnx.Module):
           for the selected algorithm.
         """
 
-        algorithm_indices: List[int] = [algorithm_index]
+        assert len(features_list) == 1
 
-        assert len(algorithm_indices) == len(features_list)
+        features = features_list[0]
 
-        for algorithm_index, features in zip(algorithm_indices, features_list):
-            inputs = features.inputs
-            hints = features.hints
-            lengths = features.lengths
+        inputs = features.inputs
+        hints = features.hints
+        lengths = features.lengths
 
-            batch_size, nb_nodes = _data_dimensions(features)
+        batch_size, nb_nodes = _data_dimensions(features)
 
-            nb_mp_steps = max(1, hints[0].data.shape[0] - 1)
-            hiddens = jnp.zeros((batch_size, nb_nodes, self.hidden_dim))
+        nb_mp_steps = max(1, hints[0].data.shape[0] - 1)
+        hiddens = jnp.zeros((batch_size, nb_nodes, self.hidden_dim))
 
-            mp_state = _MessagePassingScanState(  # pytype: disable=wrong-arg-types  # numpy-scalars
-                hint_preds=None,
-                output_preds=None,
-                hiddens=hiddens,
-            )
+        mp_state = _MessagePassingScanState(  # pytype: disable=wrong-arg-types  # numpy-scalars
+            hint_preds=None,
+            output_preds=None,
+            hiddens=hiddens,
+        )
 
-            # Do the first step outside of the scan because it has a different
-            # computation graph.
-            common_args = dict(
-                hints=hints,
-                repred=repred,
-                inputs=inputs,
-                batch_size=batch_size,
-                nb_nodes=nb_nodes,
-                lengths=lengths,
-                spec=self.spec[algorithm_index],
-                encs=self.encoders[algorithm_index],
-                decs=self.decoders[algorithm_index],
-                return_hints=return_hints,
-                return_all_outputs=return_all_outputs,
-                rng_key=rng_key,
-            )
-            mp_state, lean_mp_state = self._msg_passing_step(
-                mp_state=mp_state, i=0, first_step=True, **common_args
-            )
+        # Do the first step outside of the scan because it has a different
+        # computation graph.
+        common_args = dict(
+            hints=hints,
+            repred=repred,
+            inputs=inputs,
+            batch_size=batch_size,
+            nb_nodes=nb_nodes,
+            lengths=lengths,
+            spec=self.spec[algorithm_index],
+            encs=self.encoders[algorithm_index],
+            decs=self.decoders[algorithm_index],
+            return_hints=return_hints,
+            return_all_outputs=return_all_outputs,
+            rng_key=rng_key,
+        )
+        mp_state, lean_mp_state = self._msg_passing_step(
+            mp_state=mp_state, i=0, first_step=True, **common_args
+        )
 
-            # Then scan through the rest.
-            scan_fn = functools.partial(
-                self._msg_passing_step, first_step=False, **common_args
-            )
+        # Then scan through the rest.
+        scan_fn = functools.partial(
+            self._msg_passing_step, first_step=False, **common_args
+        )
 
-            output_mp_state, accum_mp_state = jax.lax.scan(
-                scan_fn,
-                mp_state,
-                jnp.arange(nb_mp_steps - 1) + 1,
-                length=nb_mp_steps - 1,
-            )
+        output_mp_state, accum_mp_state = jax.lax.scan(
+            scan_fn,
+            mp_state,
+            jnp.arange(nb_mp_steps - 1) + 1,
+            length=nb_mp_steps - 1,
+        )
 
-        # We only return the last algorithm's output. That's because
-        # the output only matters when a single algorithm is processed; the case
-        # `algorithm_index==-1` (meaning all algorithms should be processed)
-        # is used only to init parameters.
         accum_mp_state = jax.tree_util.tree_map(
             lambda init, tail: jnp.concatenate([init[None], tail], axis=0),
             lean_mp_state,
