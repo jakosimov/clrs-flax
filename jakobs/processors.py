@@ -470,6 +470,61 @@ class MLP(nnx.Module):
         return x
 
 
+class MessageModule(nnx.Module):
+    """Message module."""
+
+    def __init__(
+        self,
+        z_size: int,
+        edge_fts_size: int,
+        graph_fts_size: int,
+        mid_size: int,
+        rngs: nnx.Rngs,
+        msg_mlp_sizes: Optional[List[int]] = None,
+        mid_act: Optional[_Fn] = None,
+    ):
+        super().__init__()
+        self.mid_size = mid_size
+        self.msg_mlp_sizes = msg_mlp_sizes
+        self.mid_act = mid_act
+        self.m_1 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
+        self.m_2 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
+        self.m_e = nnx.Linear(edge_fts_size, self.mid_size, rngs=rngs)
+        self.m_g = nnx.Linear(graph_fts_size, self.mid_size, rngs=rngs)
+        if msg_mlp_sizes is not None:
+            self.msg_mlp_sizes_transform = MLP(
+                in_size=self.mid_size, sizes=msg_mlp_sizes, rngs=rngs
+            )
+
+    def __call__(self, z: Array, edge_fts: Array, graph_fts: Array) -> Array:
+        msg_receiver = self.m_1(z)  # (B, N, H)
+        msg_sender = self.m_2(z)  # (B, N, H)
+        msg_e = self.m_e(edge_fts)  # (B, N, N, H)
+        msg_g = self.m_g(graph_fts)  # (B, N, H)
+        msgs = (
+            jnp.expand_dims(msg_receiver, axis=1)  #   (B, 1, N, H)
+            + jnp.expand_dims(msg_sender, axis=2)  # + (B, N, 1, H)
+            + msg_e  # + (B, N, N, H)
+            + jnp.expand_dims(msg_g, axis=(1, 2))  # + (B, 1, 1, H)
+        )
+
+        if self.msg_mlp_sizes is not None:
+            msgs = self.msg_mlp_sizes_transform(jax.nn.relu(msgs))  # (B, N, N, H)
+
+        if self.mid_act is not None:
+            msgs = self.mid_act(msgs)  # (B, N, N, H)
+
+        return msgs
+
+
+class AggregationMode(StrEnum):
+    """Aggregation modes for the processor."""
+
+    MEAN = "mean"
+    MAX = "max"
+    SUM = "sum"
+
+
 class PGN(Processor):
     """Pointer Graph Networks (Veličković et al., NeurIPS 2020)."""
 
@@ -480,7 +535,7 @@ class PGN(Processor):
         mid_size: Optional[int] = None,
         mid_act: Optional[_Fn] = None,
         activation: Optional[_Fn] = jax.nn.relu,
-        reduction: _Fn = jnp.max,
+        reduction: AggregationMode = AggregationMode.MAX,
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
         use_triplets: bool = False,
@@ -509,22 +564,22 @@ class PGN(Processor):
         graph_fts_size = self.mid_size
         z_size = node_fts_size + hidden_size
 
-        self.m_1 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
-        self.m_2 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
-        self.m_e = nnx.Linear(edge_fts_size, self.mid_size, rngs=rngs)
-        self.m_g = nnx.Linear(graph_fts_size, self.mid_size, rngs=rngs)
-
-        self.o1 = nnx.Linear(z_size, self.out_size, rngs=rngs)
-        self.o2 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
+        self.message_module = MessageModule(
+            z_size=z_size,
+            edge_fts_size=edge_fts_size,
+            graph_fts_size=graph_fts_size,
+            mid_size=self.mid_size,
+            rngs=rngs,
+            msg_mlp_sizes=self._msgs_mlp_sizes,
+            mid_act=self.mid_act,
+        )
 
         if self.use_triplets:
             self.triplet_module = TripletMessageModule(nb_triplet_fts, rngs=rngs)
             self.o3 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
 
-        if self._msgs_mlp_sizes is not None:
-            self.msg_mlp_sizes_transform = MLP(
-                in_size=self.out_size, sizes=self._msgs_mlp_sizes, rngs=rngs
-            )
+        self.o1 = nnx.Linear(z_size, self.out_size, rngs=rngs)
+        self.o2 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
 
         if self.use_ln:
             self.ln = nnx.LayerNorm(
@@ -543,6 +598,45 @@ class PGN(Processor):
                 self.out_size, self.out_size, rngs=rngs
             )  # Initialise bias to -3
 
+    def message(self, z: Array, edge_fts: Array, graph_fts: Array):
+        """Message function.
+        z: Node features. (B, N, Z)
+        edge_fts: Edge features. (B, N, N, H)
+        graph_fts: Graph features. (B, H)
+        Returns:
+            msgs: Messages. (B, N, N, H)
+        """
+        msgs = self.message_module(z, edge_fts, graph_fts)
+
+        return msgs  # (B, N, N, H)
+
+    def aggregate(self, msgs: Array, adj_mat: Array):
+        """Message aggregation function.
+        msgs: Messages. (B, N, N, H)
+        adj_mat: Graph adjacency matrix. (B, N, N)
+        Returns:
+            msgs: Aggregated messages. (B, N, H)
+        """
+        if self.reduction == AggregationMode.MEAN:
+            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+            msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+        elif self.reduction == AggregationMode.MAX:
+            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
+            msgs = jnp.max(maxarg, axis=1)
+        elif self.reduction == AggregationMode.SUM:
+            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        # else:
+        #     msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        return msgs
+
+    def update(self, z: Array, msgs: Array):
+        h_1 = self.o1(z)  # (B, N, H)
+        h_2 = self.o2(msgs)  # (B, N, H)
+        ret = h_1 + h_2  # (B, N, H)
+        if self.activation is not None:
+            ret = self.activation(ret)
+        return ret  # (B, N, H)
+
     def __call__(  # pytype: disable=signature-mismatch  # numpy-scalars
         self,
         node_fts: Array,
@@ -552,19 +646,23 @@ class PGN(Processor):
         hidden: Array,
         **unused_kwargs,
     ) -> Tuple[Array, Optional[Array]]:
-        """MPNN inference step."""
+        """MPNN inference step.
+        Args:
+          node_fts: Node features. (B, N, H)
+          edge_fts: Edge features. (B, N, N, H)
+          graph_fts: Graph features. (B, H)
+          adj_mat: Graph adjacency matrix. (B, N, N)
+          hidden: Hidden features. (B, N, H)
+          **kwargs: Extra kwargs.
+        """
 
         b, n, h = node_fts.shape
         assert edge_fts.shape[:-1] == (b, n, n)
         assert graph_fts.shape[:-1] == (b,)
         assert adj_mat.shape == (b, n, n)
 
-        z = jnp.concatenate([node_fts, hidden], axis=-1)
-
-        msg_1 = self.m_1(z)
-        msg_2 = self.m_2(z)
-        msg_e = self.m_e(edge_fts)
-        msg_g = self.m_g(graph_fts)
+        # Z = 2H
+        z = jnp.concatenate([node_fts, hidden], axis=-1)  # (B, N, Z)
 
         tri_msgs = None
 
@@ -576,35 +674,13 @@ class PGN(Processor):
             if self.activation is not None:
                 tri_msgs = self.activation(tri_msgs)
 
-        msgs = (
-            jnp.expand_dims(msg_1, axis=1)
-            + jnp.expand_dims(msg_2, axis=2)
-            + msg_e
-            + jnp.expand_dims(msg_g, axis=(1, 2))
-        )
+        msgs = self.message(z, edge_fts, graph_fts)  # (B, N, N, H)
 
-        if self._msgs_mlp_sizes is not None:
-            msgs = self.msg_mlp_sizes_transform(jax.nn.relu(msgs))
+        # Message Aggregation
+        msgs = self.aggregate(msgs, adj_mat)  # (B, N, H)
 
-        if self.mid_act is not None:
-            msgs = self.mid_act(msgs)
-
-        if self.reduction == jnp.mean:
-            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-            msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
-        elif self.reduction == jnp.max:
-            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
-            msgs = jnp.max(maxarg, axis=1)
-        else:
-            msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-
-        h_1 = self.o1(z)
-        h_2 = self.o2(msgs)
-
-        ret = h_1 + h_2
-
-        if self.activation is not None:
-            ret = self.activation(ret)
+        # Updated node features
+        ret = self.update(z, msgs)  # (B, N, H)
 
         if self.use_ln:
             ret = self.ln(ret)
@@ -906,7 +982,11 @@ class ProcessorKind(StrEnum):
 
 
 def get_processor_factory(
-    kind: ProcessorKind, use_ln: bool, nb_triplet_fts: int, nb_heads: int = 4
+    kind: ProcessorKind,
+    use_ln: bool,
+    nb_triplet_fts: int,
+    nb_heads: int = 4,
+    reduction: AggregationMode = AggregationMode.MAX,
 ) -> ProcessorFactory:
     """Returns a processor factory.
 
@@ -969,6 +1049,7 @@ def get_processor_factory(
                 use_triplets=False,
                 nb_triplet_fts=0,
                 rngs=rngs,
+                reduction=reduction,
             )
         elif kind == ProcessorKind.PGN:
             processor = PGN(

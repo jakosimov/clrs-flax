@@ -145,6 +145,7 @@ def _():
         use_ln=True,
         nb_triplet_fts=32,
         nb_heads=4,
+        reduction=processors.AggregationMode.MAX,
     )
 
     mpnn_model_params = dict(
