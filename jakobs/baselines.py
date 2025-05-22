@@ -22,7 +22,6 @@ from jakobs import decoders
 from jakobs import losses
 from jakobs import model
 from jakobs import nets
-from clrs._src import probing
 from jakobs import processors
 from clrs._src import samplers
 from clrs._src import specs
@@ -36,6 +35,7 @@ import flax.nnx as nnx
 from jax import Array
 
 from jakobs.encoders import EncoderInitialiser
+from flax import traverse_util
 
 
 _Features = samplers.Features
@@ -253,6 +253,15 @@ class BaselineModel(nnx.Module, model.Model):
             rngs=rngs,
         )
 
+        # self._jitted_loss = jax.jit(
+        #     self._loss,
+        #     static_argnames=["algorithm_index"],
+        # )
+        # self._jitted_predict = jax.jit(
+        #     self._predict,
+        #     static_argnames=["algorithm_index", "return_hints", "return_all_outputs"],
+        # )
+
     def predict(
         self,
         rng_key: _Key,
@@ -266,14 +275,27 @@ class BaselineModel(nnx.Module, model.Model):
             assert len(self._spec) == 1
             algorithm_index = 0
 
-        rng_keys = rng_key
         return self._predict(
-            rng_key=rng_keys,
+            rng_key=rng_key,
             features=features,
             algorithm_index=algorithm_index,
             return_hints=return_hints,
             return_all_outputs=return_all_outputs,
         )
+
+    def feedback(
+        self, rng_key: _Key, feedback: _Feedback, algorithm_index=None
+    ) -> float:
+        if algorithm_index is None:
+            assert len(self._spec) == 1
+            algorithm_index = 0
+        rng_keys = rng_key
+        loss = self._loss(
+            rng_key=rng_keys,
+            feedback=feedback,
+            algorithm_index=algorithm_index,
+        )
+        return loss
 
     def _loss(self, rng_key, feedback: _Feedback, algorithm_index):
         """Calculates model loss f(feedback; params)."""
@@ -346,17 +368,41 @@ class BaselineModel(nnx.Module, model.Model):
         else:
             return outs, hint_preds
 
-    def feedback(
-        self, rng_key: _Key, feedback: _Feedback, algorithm_index=None
-    ) -> float:
-        if algorithm_index is None:
-            assert len(self._spec) == 1
-            algorithm_index = 0
-        rng_keys = rng_key
-        loss = self._loss(
-            rng_key=rng_keys, feedback=feedback, algorithm_index=algorithm_index
-        )
-        return loss
+    # def get_optimizer(self):
+    #     graphdef, params_state = nnx.split(self)
+    #     params = nnx.to_pure_dict(params_state)
+
+    #     optimizers = {
+    #         "backbone": optax.adam(learning_rate=1e-2),
+    #         "decoder": optax.adam(learning_rate=1e-5),
+    #     }
+    #     param_labels = traverse_util.path_aware_map(
+    #         lambda path, _: "decoder"
+    #         if "decoders" in path
+    #         else "backbone",
+    #         params,
+    #     )
+    #     # for path, label in flax.traverse_util.flatten_dict(
+    #     #     param_labels
+    #     # ).items():
+    #     #     print(path, "->", label)
+    #     multi_tx = optax.multi_transform(
+    #         optimizers, param_labels
+    #     )
+    #     opt_state = multi_tx.init(params)
+
+    #     return multi_tx, opt_state, params, graphdef
+
+    # def update_model_params(self, params):
+    #     pass
+
+    def get_params(self):
+        _, params_state = nnx.split(self)
+        params = nnx.to_pure_dict(params_state)
+        return params
+
+    def update_model_params(self, params):
+        nnx.update(self, params)
 
     # def init(self, features: Union[_Features, List[_Features]], seed: _Seed):
     #     if not isinstance(features, list):
@@ -607,3 +653,80 @@ def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
 #     )
 #     updates = unflatten(flat_updates, jax.tree_util.tree_map(lambda x: 0.0, grads))
 #     return updates, new_opt_state
+
+
+class BaselineOptimizer:
+    def __init__(self, model, backbone_lr: float = 1e-2, decoder_lr: float = 1e-5):
+        self.model = model
+        graph_def, params_state = nnx.split(model)
+        self.graph_def = graph_def
+        params = nnx.to_pure_dict(params_state)
+
+        optimizers = {
+            "backbone": optax.adam(learning_rate=backbone_lr),
+            "decoder": optax.adam(learning_rate=decoder_lr),
+        }
+        param_labels = traverse_util.path_aware_map(
+            lambda path, _: "decoder" if "decoders" in path else "backbone",
+            params,
+        )
+
+        self.tx: optax.GradientTransformationExtraArgs = optax.multi_transform(
+            optimizers, param_labels
+        )
+        self.state = self.tx.init(params)
+
+    def update(self, grads_state):
+        grads = grads_state.to_pure_dict()
+        params = self.model.get_params()
+        updates, opt_state = self.tx.update(grads, self.state, params)
+        new_params = optax.apply_updates(params, updates)
+        self.model.update_model_params(new_params)
+        self.state = opt_state
+
+    @staticmethod
+    def apply_updates(params, grads, opt_state, tx):
+        """Apply updates to the model parameters."""
+        # params = nnx.to_pure_dict(params_state)
+        updates, new_opt_state = tx.update(grads, opt_state, params)
+        new_params = optax.apply_updates(params, updates)
+        return new_params, new_opt_state
+
+    def _mk_grad_clip_optimizer(self, grad_clip_max_norm: float, learning_rate: float):
+        if grad_clip_max_norm > 0:
+            optax_chain = [
+                optax.clip_by_global_norm(grad_clip_max_norm),
+                optax.scale_by_adam(),
+                optax.scale(-learning_rate),
+            ]
+            return optax.chain(*optax_chain)
+        else:
+            return optax.adam(learning_rate=learning_rate)
+
+    def make_train_step(self):
+        graphdef = self.graph_def
+        tx = self.tx
+
+        @jax.jit
+        def train_step_jit(params, opt_state, feedback, rng_key):
+            def loss_fn(params):
+                model = nnx.merge(graphdef, params)
+                loss = model.feedback(rng_key, feedback)
+                return loss
+
+            loss, grads = jax.value_and_grad(loss_fn)(params)
+            new_params, new_opt_state = BaselineOptimizer.apply_updates(
+                params, grads, opt_state, tx
+            )
+            return loss, new_params, new_opt_state
+
+        def train_step(model, feedback, optimizer, rng_key):
+            params = model.get_params()
+            loss, new_params, new_opt_state = train_step_jit(
+                params, optimizer.state, feedback, rng_key
+            )
+            model.update_model_params(new_params)
+            optimizer.state = new_opt_state
+            return loss
+
+        return train_step

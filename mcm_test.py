@@ -7,6 +7,7 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import marimo as mo
+
     return
 
 
@@ -17,6 +18,7 @@ def _():
     import jax
     import jax.numpy as jnp
     import pprint
+
     return clrs, jax, np, pprint
 
 
@@ -31,38 +33,42 @@ def _(jax, np):
 def _(clrs, pprint):
     # algorithm = 'bubble_sort'
     algorithm = "matrix_chain_order"
-    n_nodes = 8
-    batch_size = 8
+    DEBUG_DATASET = False
+    if DEBUG_DATASET:
+        n_nodes = 8
+        batch_size = 8
+        test_batch_size = 50
+        num_samples = 50
+    else:
+        n_nodes = 16
+        batch_size = 8
+        test_batch_size = 100
+        num_samples = 1000
 
     train_sampler, spec = clrs.build_sampler(
-        name=algorithm, num_samples=100, length=n_nodes
+        name=algorithm, num_samples=num_samples, length=n_nodes
     )
 
     test_sampler, spec = clrs.build_sampler(
-        name=algorithm, num_samples=100, length=n_nodes * 4
+        name=algorithm,
+        num_samples=test_batch_size,
+        length=n_nodes * 4,
     )
 
     pprint.pprint(spec)
-
 
     def _iterate_sampler(sampler, batch_size):
         while True:
             yield sampler.next(batch_size)
 
-
-    train_sampler = _iterate_sampler(
-        train_sampler, batch_size=batch_size
-    )
-    test_sampler = _iterate_sampler(
-        test_sampler, batch_size=100
-    )
-    return spec, test_sampler, train_sampler
+    train_sampler = _iterate_sampler(train_sampler, batch_size=batch_size)
+    test_sampler = _iterate_sampler(test_sampler, batch_size=test_batch_size)
+    return batch_size, spec, test_sampler, train_sampler
 
 
 @app.cell
 def _(np, train_sampler):
     dummy_trajectory = next(train_sampler)
-
 
     def print_datapoint(probe, is_hint=False):
         print(probe)
@@ -78,7 +84,6 @@ def _(np, train_sampler):
         elif probe.location == "edge":
             print("values in data type")
             print(np.unique(data[0]))
-
 
     def print_trajectory(trajectory):
         inputs = trajectory.features.inputs
@@ -100,76 +105,127 @@ def _(np, train_sampler):
         for output in outputs:
             print_datapoint(output)
 
-
-    print("Dummy trajectory:")
-    print_trajectory(dummy_trajectory)
+    # print("Dummy trajectory:")
+    # print_trajectory(dummy_trajectory)
     return (dummy_trajectory,)
 
 
 @app.cell
-def _():
-    # gat_processor_factory = clrs.get_processor_factory('gat', use_ln=True, nb_triplet_fts=32, nb_heads=4)
-    # gat_model_params = dict(
-    #     processor_factory=gat_processor_factory,
-    #     hidden_dim=32,
-    #     encode_hints=True,
-    #     decode_hints=True,
-    #     # decode_diffs=False,
-    #     # hint_teacher_forcing_noise=1.0,
-    #     use_lstm=False,
-    #     learning_rate=0.001,
-    #     checkpoint_path='/tmp/checkpt',
-    #     freeze_processor=False,
-    #     dropout_prob=0.0,
-    # )
-
-    # gat_model = clrs.models.BaselineModel(
-    #     spec=spec,
-    #     dummy_trajectory=dummy_trajectory,
-    #     **gat_model_params
-    # )
-
-    # gat_model.init(dummy_trajectory.features, 1234)
-    return
-
-
-@app.cell
-def _():
+def _(dummy_trajectory, spec):
     from jakobs import processors
     from jakobs import baselines
     from flax import nnx
     import jax.random as random
 
-    mpnn_processor_factory = processors.get_processor_factory(
-        processors.ProcessorKind.MPNN,
-        use_ln=True,
-        nb_triplet_fts=32,
-        nb_heads=4,
-        reduction=processors.AggregationMode.MAX,
-    )
+    def make_mpnn_model(aggregation_modes):
+        mpnn_processor_factory = processors.get_processor_factory(
+            processors.ProcessorKind.MPNN,
+            use_ln=True,
+            nb_triplet_fts=32,
+            nb_heads=4,
+            reduction=aggregation_modes,
+        )
 
-    mpnn_model_params = dict(
-        processor_factory=mpnn_processor_factory,
-        hidden_dim=32,
-        encode_hints=True,
-        decode_hints=True,
-        use_lstm=False,
-        checkpoint_path="/tmp/checkpt",
-        freeze_processor=False,
-        dropout_prob=0.0,
-    )
-    return baselines, mpnn_model_params, nnx, random
+        mpnn_model_params = dict(
+            processor_factory=mpnn_processor_factory,
+            hidden_dim=32,
+            encode_hints=True,
+            decode_hints=True,
+            use_lstm=False,
+            checkpoint_path="/tmp/checkpt",
+            freeze_processor=False,
+            dropout_prob=0.0,
+        )
+
+        rngs = nnx.Rngs(params=0, dropout=random.key(1))
+        mpnn_model = baselines.BaselineModel(
+            spec=spec,
+            dummy_trajectory=dummy_trajectory,
+            rngs=rngs,
+            **mpnn_model_params,
+        )
+        return mpnn_model
+
+    return baselines, make_mpnn_model, nnx, processors
 
 
 @app.cell
-def _(clrs, jax, nnx, rng):
+def _():
+    learning_rate = 1e-2
+    max_steps = 10000
+    return learning_rate, max_steps
+
+
+@app.cell
+def _(batch_size, clrs, learning_rate, max_steps, wandb):
+
+    # Initialize a new W&B run at the start of the notebook
+    wandb.init(
+        project="my-flax-project",
+        config={
+            "epochs": max_steps,
+            "batch_size": batch_size,
+            "learning_rate": learning_rate,
+        },
+    )
+
+    def evaluate_model(
+        model,
+        val_feedback,
+        test_feedback,
+        step,
+        rng_key,
+        cur_loss,
+    ):
+        predictions_val, _ = model.predict(rng_key, val_feedback.features)
+        out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
+        predictions, _ = model.predict(rng_key, test_feedback.features)
+        out = clrs.evaluate(test_feedback.outputs, predictions)
+
+        val_acc = out_val["score"]
+        test_acc = out["score"]
+        wandb.log(
+            {
+                "loss": float(cur_loss),  # training loss
+                "val_acc": float(val_acc),  # validation accuracy
+                "test_acc": float(test_acc),  # test accuracy
+            },
+            step=step,
+        )
+
+        print(
+            f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
+        )
+
+    return (evaluate_model,)
+
+
+@app.cell
+def _(evaluate_model, jax, nnx, rng):
+    def old_train_step(
+        model,
+        feedback,
+        optimizer,
+        rng_key,
+    ):
+        def loss_fn(model):
+            return model.feedback(rng_key, feedback)
+
+        cur_loss, grads = nnx.value_and_grad(loss_fn)(model)
+        optimizer.update(grads)
+        return cur_loss
+        # rng_key = new_rng_key
+
     def train_model(
         model,
         train_sampler,
         test_sampler,
         optimizer,
-        max_steps=200,
+        train_step=None,
+        max_steps=1000,
     ):
+        if train_step is None:
+            train_step = optimizer.make_train_step()
         rng_key = jax.random.PRNGKey(rng.randint(2**32))
         step = 0
         while step <= max_steps:
@@ -178,121 +234,115 @@ def _(clrs, jax, nnx, rng):
                 next(test_sampler),
             )
             rng_key, new_rng_key = jax.random.split(rng_key)
-
-            def loss_fn(model):
-                return model.feedback(rng_key, feedback)
-
-            cur_loss, grads = nnx.value_and_grad(loss_fn)(model)
-            optimizer.update(grads)
+            cur_loss = train_step(
+                model=model,
+                feedback=feedback,
+                optimizer=optimizer,
+                rng_key=rng_key,
+            )
             rng_key = new_rng_key
             if step % 10 == 0:
-                predictions_val, _ = model.predict(
-                    rng_key, feedback.features
+                evaluate_model(
+                    model,
+                    feedback,
+                    test_feedback,
+                    step,
+                    rng_key,
+                    cur_loss,
                 )
-                out_val = clrs.evaluate(
-                    feedback.outputs, predictions_val
-                )
-                predictions, _ = model.predict(
-                    rng_key, test_feedback.features
-                )
-                out = clrs.evaluate(
-                    test_feedback.outputs, predictions
-                )
-                print(
-                    f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
-                )
+
             step += 1
 
-        return model
     return (train_model,)
-
-
-@app.cell
-def _():
-    import optax
-
-    learning_rate = 1e-2
-
-    grad_clip_max_norm = 0.0
-    if grad_clip_max_norm != 0.0:
-        optax_chain = [
-            optax.clip_by_global_norm(grad_clip_max_norm),
-            optax.scale_by_adam(),
-            optax.scale(-learning_rate),
-        ]
-        opt = optax.chain(*optax_chain)
-    else:
-        opt = optax.adam(learning_rate)
-    return learning_rate, opt
 
 
 @app.cell
 def _(
     baselines,
-    dummy_trajectory,
-    mpnn_model_params,
-    nnx,
-    opt,
-    random,
-    spec,
+    make_mpnn_model,
+    max_steps,
+    processors,
     test_sampler,
     train_model,
     train_sampler,
 ):
-    rngs = nnx.Rngs(params=0, dropout=random.key(1))
-    mpnn_model = baselines.BaselineModel(
-        spec=spec,
-        dummy_trajectory=dummy_trajectory,
-        rngs=rngs,
-        **mpnn_model_params,
+    mpnn_model = make_mpnn_model(
+        [
+            processors.AggregationMode.MAX,
+            processors.AggregationMode.SUM,
+        ]
     )
-
-    for path, module in mpnn_model.iter_modules():
-        print(path, type(module).__name__)
-
-    optimizer = nnx.Optimizer(mpnn_model, opt)
+    baseline_optimizer = baselines.BaselineOptimizer(mpnn_model)
     train_model(
-        mpnn_model,
-        train_sampler,
-        test_sampler,
-        optimizer,
-        max_steps=100,
+        model=mpnn_model,
+        train_sampler=train_sampler,
+        test_sampler=test_sampler,
+        optimizer=baseline_optimizer,
+        max_steps=max_steps,
     )
     return
 
 
 @app.cell
+def _():
+    # mpnn_model2 = make_mpnn_model(
+    #     [
+    #         processors.AggregationMode.MAX,
+    #         processors.AggregationMode.SUM,
+    #     ]
+    # )
+    # # for path, module in mpnn_model.iter_modules():
+    # #     print(path, type(module).__name__)
+
+    # optimizer = baselines.BaselineOptimizer(
+    #     mpnn_model2,
+    #     backbone_lr=learning_rate,
+    #     decoder_lr=learning_rate,
+    # )
+    # train_model(
+    #     mpnn_model2,
+    #     train_sampler,
+    #     test_sampler,
+    #     optimizer,
+    #     max_steps=max_steps,
+    #     train_step=optimizer.make_train_step(),
+    # )
+    return
+
+
+@app.cell
 def _(clrs, dummy_trajectory, learning_rate, spec):
-    old_mpnn_processor_factory = clrs.get_processor_factory(
-        "mpnn", use_ln=True, nb_triplet_fts=32, nb_heads=4
-    )
-    old_mpnn_model_params = dict(
-        processor_factory=old_mpnn_processor_factory,
-        hidden_dim=32,
-        encode_hints=True,
-        decode_hints=True,
-        use_lstm=False,
-        learning_rate=learning_rate,
-        checkpoint_path="/tmp/checkpt",
-        freeze_processor=False,
-        dropout_prob=0.0,
-    )
+    def make_old_mpnn_model():
+        old_mpnn_processor_factory = clrs.get_processor_factory(
+            "mpnn", use_ln=True, nb_triplet_fts=32, nb_heads=4
+        )
+        old_mpnn_model_params = dict(
+            processor_factory=old_mpnn_processor_factory,
+            hidden_dim=32,
+            encode_hints=True,
+            decode_hints=True,
+            use_lstm=False,
+            learning_rate=learning_rate,
+            checkpoint_path="/tmp/checkpt",
+            freeze_processor=False,
+            dropout_prob=0.0,
+        )
 
-    old_mpnn_model = clrs.models.BaselineModel(
-        spec=spec,
-        dummy_trajectory=dummy_trajectory,
-        **old_mpnn_model_params,
-    )
+        old_mpnn_model = clrs.models.BaselineModel(
+            spec=spec,
+            dummy_trajectory=dummy_trajectory,
+            **old_mpnn_model_params,
+        )
 
-    old_mpnn_model.init(dummy_trajectory.features, 1234)
-    return (old_mpnn_model,)
+        old_mpnn_model.init(dummy_trajectory.features, 1234)
+        return old_mpnn_model
+
+    return
 
 
 @app.cell
 def _(clrs, jax, rng):
-    def old_train_model(
-        model, train_sampler, test_sampler, max_steps=200
-    ):
+    def old_train_model(model, train_sampler, test_sampler, max_steps=200):
         rng_key = jax.random.PRNGKey(rng.randint(2**32))
         step = 0
         while step <= max_steps:
@@ -306,35 +356,27 @@ def _(clrs, jax, rng):
             cur_loss = model.feedback(rng_key, feedback)
             rng_key = new_rng_key
             if step % 10 == 0:
-                predictions_val, _ = model.predict(
-                    rng_key, feedback.features
-                )
-                out_val = clrs.evaluate(
-                    feedback.outputs, predictions_val
-                )
-                predictions, _ = model.predict(
-                    rng_key, test_feedback.features
-                )
-                out = clrs.evaluate(
-                    test_feedback.outputs, predictions
-                )
+                predictions_val, _ = model.predict(rng_key, feedback.features)
+                out_val = clrs.evaluate(feedback.outputs, predictions_val)
+                predictions, _ = model.predict(rng_key, test_feedback.features)
+                out = clrs.evaluate(test_feedback.outputs, predictions)
                 print(
                     f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
                 )
             step += 1
 
-        return model
-    return (old_train_model,)
+    return
 
 
 @app.cell
-def _(old_mpnn_model, old_train_model, test_sampler, train_sampler):
-    old_train_model(
-        old_mpnn_model,
-        train_sampler,
-        test_sampler,
-        max_steps=100,
-    )
+def _():
+    # old_mpnn_model = make_old_mpnn_model()
+    # old_train_model(
+    #     old_mpnn_model,
+    #     train_sampler,
+    #     test_sampler,
+    #     max_steps=max_steps,
+    # )
     return
 
 

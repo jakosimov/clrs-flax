@@ -525,6 +525,24 @@ class AggregationMode(StrEnum):
     SUM = "sum"
 
 
+def sum_aggr(msgs: Array, adj_mat: Array) -> Array:
+    """Sum aggregation function."""
+    return jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+
+
+def max_aggr(msgs: Array, adj_mat: Array) -> Array:
+    """Max aggregation function."""
+    maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
+    return jnp.max(maxarg, axis=1)
+
+
+def mean_aggr(msgs: Array, adj_mat: Array) -> Array:
+    """Mean aggregation function."""
+    msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+    msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+    return msgs
+
+
 class PGN(Processor):
     """Pointer Graph Networks (Veličković et al., NeurIPS 2020)."""
 
@@ -535,7 +553,7 @@ class PGN(Processor):
         mid_size: Optional[int] = None,
         mid_act: Optional[_Fn] = None,
         activation: Optional[_Fn] = jax.nn.relu,
-        reduction: AggregationMode = AggregationMode.MAX,
+        reduction_modes: list[AggregationMode] = [AggregationMode.MAX],
         msgs_mlp_sizes: Optional[List[int]] = None,
         use_ln: bool = False,
         use_triplets: bool = False,
@@ -551,7 +569,7 @@ class PGN(Processor):
         self.out_size = out_size
         self.mid_act = mid_act
         self.activation = activation
-        self.reduction = reduction
+        self.reduction_modes = reduction_modes
         self._msgs_mlp_sizes = msgs_mlp_sizes
         self.use_ln = use_ln
         self.use_triplets = use_triplets
@@ -564,15 +582,18 @@ class PGN(Processor):
         graph_fts_size = self.mid_size
         z_size = node_fts_size + hidden_size
 
-        self.message_module = MessageModule(
-            z_size=z_size,
-            edge_fts_size=edge_fts_size,
-            graph_fts_size=graph_fts_size,
-            mid_size=self.mid_size,
-            rngs=rngs,
-            msg_mlp_sizes=self._msgs_mlp_sizes,
-            mid_act=self.mid_act,
-        )
+        self.message_modules: List[MessageModule] = [
+            MessageModule(
+                z_size=z_size,
+                edge_fts_size=edge_fts_size,
+                graph_fts_size=graph_fts_size,
+                mid_size=self.mid_size,
+                rngs=rngs,
+                msg_mlp_sizes=self._msgs_mlp_sizes,
+                mid_act=self.mid_act,
+            )
+            for _ in range(len(self.reduction_modes))
+        ]
 
         if self.use_triplets:
             self.triplet_module = TripletMessageModule(nb_triplet_fts, rngs=rngs)
@@ -598,7 +619,7 @@ class PGN(Processor):
                 self.out_size, self.out_size, rngs=rngs
             )  # Initialise bias to -3
 
-    def message(self, z: Array, edge_fts: Array, graph_fts: Array):
+    def message(self, z: Array, edge_fts: Array, graph_fts: Array) -> List[Array]:
         """Message function.
         z: Node features. (B, N, Z)
         edge_fts: Edge features. (B, N, N, H)
@@ -606,28 +627,42 @@ class PGN(Processor):
         Returns:
             msgs: Messages. (B, N, N, H)
         """
-        msgs = self.message_module(z, edge_fts, graph_fts)
+        msgs = [
+            message_module(z, edge_fts, graph_fts)
+            for message_module in self.message_modules
+        ]
 
-        return msgs  # (B, N, N, H)
+        return msgs  # [(B, N, N, H)]
 
-    def aggregate(self, msgs: Array, adj_mat: Array):
+    def aggregate_one(self, msgs: Array, adj_mat: Array, reduction: AggregationMode):
+        if reduction == AggregationMode.MEAN:
+            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+            msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+        elif reduction == AggregationMode.MAX:
+            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
+            msgs = jnp.max(maxarg, axis=1)
+        elif reduction == AggregationMode.SUM:
+            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        # else:
+        #     msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        return msgs
+
+    def aggregate(self, msgs: list[Array], adj_mat: Array):
         """Message aggregation function.
         msgs: Messages. (B, N, N, H)
         adj_mat: Graph adjacency matrix. (B, N, N)
         Returns:
             msgs: Aggregated messages. (B, N, H)
         """
-        if self.reduction == AggregationMode.MEAN:
-            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-            msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
-        elif self.reduction == AggregationMode.MAX:
-            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
-            msgs = jnp.max(maxarg, axis=1)
-        elif self.reduction == AggregationMode.SUM:
-            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-        # else:
-        #     msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-        return msgs
+        msgs_stacked = jnp.stack(
+            [
+                self.aggregate_one(msg, adj_mat, reduction)
+                for msg, reduction in zip(msgs, self.reduction_modes)
+            ],
+            axis=0,
+        )
+        msgs_aggregated = jnp.mean(msgs_stacked, axis=0)  # (B, N, H)
+        return msgs_aggregated
 
     def update(self, z: Array, msgs: Array):
         h_1 = self.o1(z)  # (B, N, H)
@@ -677,17 +712,17 @@ class PGN(Processor):
         msgs = self.message(z, edge_fts, graph_fts)  # (B, N, N, H)
 
         # Message Aggregation
-        msgs = self.aggregate(msgs, adj_mat)  # (B, N, H)
+        agg_msgs = self.aggregate(msgs, adj_mat)  # (B, N, H)
 
         # Updated node features
-        ret = self.update(z, msgs)  # (B, N, H)
+        ret = self.update(z, agg_msgs)  # (B, N, H)
 
         if self.use_ln:
             ret = self.ln(ret)
 
         if self.gated:
             gate = jax.nn.sigmoid(
-                self.gate3(jax.nn.relu(self.gate1(z) + self.gate2(msgs)))
+                self.gate3(jax.nn.relu(self.gate1(z) + self.gate2(agg_msgs)))
             )
             ret = ret * gate + hidden * (1 - gate)
 
@@ -986,7 +1021,7 @@ def get_processor_factory(
     use_ln: bool,
     nb_triplet_fts: int,
     nb_heads: int = 4,
-    reduction: AggregationMode = AggregationMode.MAX,
+    reduction: list[AggregationMode] = [AggregationMode.MAX],
 ) -> ProcessorFactory:
     """Returns a processor factory.
 
@@ -1049,7 +1084,7 @@ def get_processor_factory(
                 use_triplets=False,
                 nb_triplet_fts=0,
                 rngs=rngs,
-                reduction=reduction,
+                reduction_modes=reduction,
             )
         elif kind == ProcessorKind.PGN:
             processor = PGN(

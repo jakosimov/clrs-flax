@@ -114,7 +114,8 @@ class NetFlax(nnx.Module):
 
         self.algorithm_indices: List[int] = list(range(len(spec)))
 
-        self.dropout = nnx.Dropout(rate=self._dropout_prob, rngs=rngs)
+        if self._dropout_prob > 0.0:
+            self.dropout = nnx.Dropout(rate=self._dropout_prob, rngs=rngs)
 
     def _construct_encoders_decoders(
         self, rngs: nnx.Rngs
@@ -440,7 +441,7 @@ class NetFlax(nnx.Module):
                 nb_nodes=nb_nodes,
             )
 
-        if not repred:  # dropout only on training
+        if not repred and self._dropout_prob > 0.0:  # dropout only on training
             nxt_hidden = self.dropout(nxt_hidden)
 
         nxt_lstm_state = None
