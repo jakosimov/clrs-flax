@@ -1,6 +1,8 @@
+import os
+import jax
+
 from attr import dataclass
 import clrs
-import jax
 
 from jakobs import processors
 from jakobs import baselines
@@ -10,7 +12,6 @@ import numpy as np
 
 import wandb
 import pickle
-import os
 from jakobs.processors import AggregationMode
 
 
@@ -62,15 +63,28 @@ def _get_sampler(name, num_samples, length):
     return sampler, spec
 
 
+test_length_multiplier = 4
+
+
 class DatasetConfig:
     def __init__(
-        self, algorithm_name, num_samples, length, train_batch_size, test_batch_size
+        self,
+        algorithm_name,
+        num_samples,
+        length,
+        train_batch_size,
+        num_test_samples,
+        test_batch_size=None,
     ):
         self.algorithm_name = algorithm_name
         self.num_samples = num_samples
         self.length = length
         self.train_batch_size = train_batch_size
+        if test_batch_size is None:
+            test_batch_size = num_test_samples
         self.test_batch_size = test_batch_size
+        self.num_test_samples = num_test_samples
+        self.test_length = length * test_length_multiplier
         self.train_sampler = None
         self.test_sampler = None
 
@@ -96,8 +110,8 @@ class DatasetConfig:
             return
         self.test_sampler, _ = _get_sampler(
             name=self.algorithm_name,
-            num_samples=self.test_batch_size,
-            length=self.length * 4,
+            num_samples=self.num_test_samples,
+            length=self.test_length,
         )
         # print(
         #     "Generated test sampler for algorithm:",
@@ -136,6 +150,7 @@ class MPNNConfig:
     decoder_learning_rate: float = 1e-5
     backbone_learning_rate: float = 1e-3
     max_steps: int = 1000
+    disable_jit: bool = False
 
 
 def make_mpnn_model(mpnn_config, dataset):
@@ -171,14 +186,18 @@ def make_mpnn_model(mpnn_config, dataset):
 def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig):
     config = {
         "epochs": mpnn_config.max_steps,
-        "batch_size": dataset.train_batch_size,
+        "train_batch_size": dataset.train_batch_size,
+        "test_batch_size": dataset.test_batch_size,
         "decoder_learning_rate": mpnn_config.decoder_learning_rate,
         "backbone_learning_rate": mpnn_config.backbone_learning_rate,
         "aggregation_modes": [mode.name for mode in mpnn_config.aggregation_modes],
         "algorithm": dataset.algorithm_name,
         "num_training_samples": dataset.num_samples,
-        "num_test_samples": dataset.test_batch_size,
+        "num_test_samples": dataset.num_test_samples,
         "graph_size": dataset.length,
+        "disable_jit": mpnn_config.disable_jit,
+        "device_kind": jax.devices()[-1].device_kind,
+        "test_length": dataset.test_length,
     }
     wandb.init(
         project=f"{dataset.algorithm_name}-mpnn",
@@ -270,54 +289,24 @@ def train_model(
 
 
 def run_experiment(dataset, mpnn_config):
-    train_sampler, test_sampler = dataset.get_samplers()
-    mpnn_model = make_mpnn_model(mpnn_config, dataset)
-    optimizer = baselines.BaselineOptimizer(
-        mpnn_model,
-        backbone_lr=mpnn_config.backbone_learning_rate,
-        decoder_lr=mpnn_config.decoder_learning_rate,
-    )
+    with jax.disable_jit(mpnn_config.disable_jit):
+        if mpnn_config.disable_jit:
+            print("JIT is disabled")
+        train_sampler, test_sampler = dataset.get_samplers()
+        mpnn_model = make_mpnn_model(mpnn_config, dataset)
+        optimizer = baselines.BaselineOptimizer(
+            mpnn_model,
+            backbone_lr=mpnn_config.backbone_learning_rate,
+            decoder_lr=mpnn_config.decoder_learning_rate,
+        )
 
-    _initialize_wandb(mpnn_config, dataset)
+        _initialize_wandb(mpnn_config, dataset)
 
-    train_model(
-        model=mpnn_model,
-        train_sampler=train_sampler,
-        test_sampler=test_sampler,
-        optimizer=optimizer,
-        max_steps=mpnn_config.max_steps,
-    )
-    wandb.finish()
-
-
-if __name__ == "__main__":
-    algorithm = "matrix_chain_order"
-    DEBUG_DATASET = True
-
-    debug_dataset = DatasetConfig(
-        algorithm_name=algorithm,
-        num_samples=50,
-        length=8,
-        train_batch_size=8,
-        test_batch_size=50,
-    )
-    standard_dataset = DatasetConfig(
-        algorithm_name=algorithm,
-        num_samples=1000,
-        length=16,
-        train_batch_size=8,
-        test_batch_size=100,
-    )
-    if DEBUG_DATASET:
-        current_dataset = debug_dataset
-    else:
-        current_dataset = standard_dataset
-
-    current_mpnn_config = MPNNConfig(
-        aggregation_modes=[AggregationMode.MAX, AggregationMode.SUM],
-        decoder_learning_rate=1e-5,
-        backbone_learning_rate=1e-3,
-        max_steps=1000,
-    )
-
-    run_experiment(current_dataset, current_mpnn_config)
+        train_model(
+            model=mpnn_model,
+            train_sampler=train_sampler,
+            test_sampler=test_sampler,
+            optimizer=optimizer,
+            max_steps=mpnn_config.max_steps,
+        )
+        wandb.finish()

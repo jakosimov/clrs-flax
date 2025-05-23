@@ -45,90 +45,6 @@ _Seed = jnp.integer
 _Spec = specs.Spec
 _Key = Array
 
-# pytype: disable=signature-mismatch
-
-
-# def _maybe_pick_first_pmapped(tree):
-#     if jax.local_device_count() == 1:
-#         return tree
-#     return jax.tree_util.tree_map(lambda x: x[0], tree)
-
-
-# @jax.jit
-# def _restack_from_pmap(tree):
-#     """Stack the results of a pmapped computation across the first two axes."""
-#     restack_array = lambda x: jnp.reshape(x, (-1,) + x.shape[2:])
-#     return jax.tree_util.tree_map(restack_array, tree)
-
-
-# def _maybe_restack_from_pmap(tree):
-#     if jax.local_device_count() == 1:
-#         return tree
-#     return _restack_from_pmap(tree)
-
-
-# @functools.partial(jax.jit, static_argnums=[1, 2])
-# def _pmap_reshape(x, n_devices, split_axis=0):
-#     """Splits a pytree over n_devices on axis split_axis for pmapping."""
-
-#     def _reshape(arr):
-#         new_shape = (
-#             arr.shape[:split_axis]
-#             + (n_devices, arr.shape[split_axis] // n_devices)
-#             + arr.shape[split_axis + 1 :]
-#         )
-#         return jnp.moveaxis(jnp.reshape(arr, new_shape), split_axis, 0)
-
-#     return jax.tree_util.tree_map(_reshape, x)
-
-
-# def _maybe_pmap_reshape(x, split_axis=0):
-#     n_devices = jax.local_device_count()
-#     if n_devices == 1:
-#         return x
-#     return _pmap_reshape(x, n_devices, split_axis)
-
-
-# @functools.partial(jax.jit, static_argnums=1)
-# def _pmap_data(data: Union[_Feedback, _Features], n_devices: int):
-#     """Replicate/split feedback or features for pmapping."""
-#     if isinstance(data, _Feedback):
-#         features = data.features
-#     else:
-#         features = data
-#     pmap_data = features._replace(
-#         inputs=_pmap_reshape(features.inputs, n_devices),
-#         hints=_pmap_reshape(features.hints, n_devices, split_axis=1),
-#         lengths=_pmap_reshape(features.lengths, n_devices),
-#     )
-#     if isinstance(data, _Feedback):
-#         pmap_data = data._replace(
-#             features=pmap_data, outputs=_pmap_reshape(data.outputs, n_devices)
-#         )
-#     return pmap_data
-
-
-# def _maybe_pmap_data(data: Union[_Feedback, _Features]):
-#     n_devices = jax.local_device_count()
-#     if n_devices == 1:
-#         return data
-#     return _pmap_data(data, n_devices)
-
-
-# def _maybe_put_replicated(tree):
-#     if jax.local_device_count() == 1:
-#         return jax.device_put(tree)
-#     else:
-#         return jax.device_put_replicated(tree, jax.local_devices())
-
-
-# def _maybe_pmap_rng_key(rng_key: _Key):
-#     n_devices = jax.local_device_count()
-#     if n_devices == 1:
-#         return rng_key
-#     pmap_rng_keys = jax.random.split(rng_key, n_devices)
-#     return jax.device_put_sharded(list(pmap_rng_keys), jax.local_devices())
-
 
 def print_value(name, x):
     """Prints the value of x."""
@@ -368,34 +284,6 @@ class BaselineModel(nnx.Module, model.Model):
         else:
             return outs, hint_preds
 
-    # def get_optimizer(self):
-    #     graphdef, params_state = nnx.split(self)
-    #     params = nnx.to_pure_dict(params_state)
-
-    #     optimizers = {
-    #         "backbone": optax.adam(learning_rate=1e-2),
-    #         "decoder": optax.adam(learning_rate=1e-5),
-    #     }
-    #     param_labels = traverse_util.path_aware_map(
-    #         lambda path, _: "decoder"
-    #         if "decoders" in path
-    #         else "backbone",
-    #         params,
-    #     )
-    #     # for path, label in flax.traverse_util.flatten_dict(
-    #     #     param_labels
-    #     # ).items():
-    #     #     print(path, "->", label)
-    #     multi_tx = optax.multi_transform(
-    #         optimizers, param_labels
-    #     )
-    #     opt_state = multi_tx.init(params)
-
-    #     return multi_tx, opt_state, params, graphdef
-
-    # def update_model_params(self, params):
-    #     pass
-
     def get_params(self):
         _, params_state = nnx.split(self)
         params = nnx.to_pure_dict(params_state)
@@ -403,134 +291,6 @@ class BaselineModel(nnx.Module, model.Model):
 
     def update_model_params(self, params):
         nnx.update(self, params)
-
-    # def init(self, features: Union[_Features, List[_Features]], seed: _Seed):
-    #     if not isinstance(features, list):
-    #         assert len(self._spec) == 1
-    #         features = [features]
-    #     self.params = self.net_fn.init(
-    #         jax.random.PRNGKey(seed),
-    #         features,
-    #         True,  # pytype: disable=wrong-arg-types  # jax-ndarray
-    #         algorithm_index=-1,
-    #         return_hints=False,
-    #         return_all_outputs=False,
-    #     )
-    #     self.opt_state = self.opt.init(self.params)
-    #     # We will use the optimizer state skeleton for traversal when we
-    #     # want to avoid updating the state of params of untrained algorithms.
-    #     self.opt_state_skeleton = self.opt.init(jnp.zeros(1))
-
-    # @property
-    # def params(self):
-    #     if self._device_params is None:
-    #         return None
-    #     return jax.device_get(_maybe_pick_first_pmapped(self._device_params))
-
-    # @params.setter
-    # def params(self, params):
-    #     self._device_params = _maybe_put_replicated(params)
-
-    # @property
-    # def opt_state(self):
-    #     if self._device_opt_state is None:
-    #         return None
-    #     return jax.device_get(_maybe_pick_first_pmapped(self._device_opt_state))
-
-    # @opt_state.setter
-    # def opt_state(self, opt_state):
-    #     self._device_opt_state = _maybe_put_replicated(opt_state)
-
-    # def _compute_grad(self, params, rng_key, feedback, algorithm_index):
-    #     lss, grads = jax.value_and_grad(self._loss)(
-    #         params, rng_key, feedback, algorithm_index
-    #     )
-    #     return self._maybe_pmean(lss), self._maybe_pmean(grads)
-
-    # def _feedback(self, params, rng_key, feedback, opt_state, algorithm_index):
-    #     lss, grads = jax.value_and_grad(self._loss)(
-    #         params, rng_key, feedback, algorithm_index
-    #     )
-    #     params, opt_state = self._update_params(
-    #         params, grads, opt_state, algorithm_index
-    #     )
-    #     lss = self._maybe_pmean(lss)
-    #     return lss, params, opt_state
-
-    # def compute_grad(
-    #     self,
-    #     rng_key: _Key,
-    #     feedback: _Feedback,
-    #     algorithm_index: Optional[int] = None,
-    # ) -> Tuple[float, _Array]:
-    #     """Compute gradients."""
-
-    #     if algorithm_index is None:
-    #         assert len(self._spec) == 1
-    #         algorithm_index = 0
-    #     assert algorithm_index >= 0
-
-    #     # Calculate gradients.
-    #     rng_keys = _maybe_pmap_rng_key(
-    #         rng_key
-    #     )  # pytype: disable=wrong-arg-types  # numpy-scalars
-    #     feedback = _maybe_pmap_data(feedback)
-    #     loss, grads = self.jitted_grad(
-    #         self._device_params, rng_keys, feedback, algorithm_index
-    #     )
-    #     loss = _maybe_pick_first_pmapped(loss)
-    #     grads = _maybe_pick_first_pmapped(grads)
-
-    #     return loss, grads
-
-    # def _update_params(self, params, grads, opt_state, algorithm_index):
-    #     updates, opt_state = filter_null_grads(
-    #         grads, self.opt, opt_state, self.opt_state_skeleton, algorithm_index
-    #     )
-    #     if self._freeze_processor:
-    #         params_subset = _filter_out_processor(params)
-    #         updates_subset = _filter_out_processor(updates)
-    #         assert len(params) > len(params_subset)
-    #         assert params_subset
-    #         new_params = optax.apply_updates(params_subset, updates_subset)
-    #         new_params = hk.data_structures.merge(params, new_params)
-    #     else:
-    #         new_params = optax.apply_updates(params, updates)
-
-    #     return new_params, opt_state
-
-    # def update_model_params_accum(self, grads) -> None:
-    #     grads = _maybe_put_replicated(grads)
-    #     self._device_params, self._device_opt_state = self.jitted_accum_opt_update(
-    #         self._device_params,
-    #         grads,
-    #         self._device_opt_state,
-    #         self.opt,
-    #         self._freeze_processor,
-    #     )
-
-    # def verbose_loss(self, feedback: _Feedback, extra_info) -> Dict[str, _Array]:
-    #     """Gets verbose loss information."""
-    #     hint_preds = extra_info
-
-    #     nb_nodes = _nb_nodes(feedback, is_chunked=False)
-    #     lengths = feedback.features.lengths
-    #     losses_ = {}
-
-    #     # Optionally accumulate hint losses.
-    #     if self.decode_hints:
-    #         for truth in feedback.features.hints:
-    #             losses_.update(
-    #                 losses.hint_loss(
-    #                     truth=truth,
-    #                     preds=[x[truth.name] for x in hint_preds],
-    #                     lengths=lengths,
-    #                     nb_nodes=nb_nodes,
-    #                     verbose=True,
-    #                 )
-    #             )
-
-    #     return losses_
 
 
 def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
@@ -541,118 +301,6 @@ def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
             else:
                 return inp.data.shape[1]  # inputs are batch x nodes x ...
     assert False
-
-
-# def _param_in_processor(module_name):
-#     return processors.PROCESSOR_TAG in module_name
-
-
-# def _filter_out_processor(params: hk.Params) -> hk.Params:
-#     return hk.data_structures.filter(
-#         lambda module_name, n, v: not _param_in_processor(module_name), params
-#     )
-
-
-# def _filter_in_processor(params: hk.Params) -> hk.Params:
-#     return hk.data_structures.filter(
-#         lambda module_name, n, v: _param_in_processor(module_name), params
-#     )
-
-
-# def accum_opt_update(params, grads, opt_state, opt, freeze_processor):
-#     """Update params from gradients collected from several algorithms."""
-#     # Average the gradients over all algos
-#     grads = jax.tree_util.tree_map(
-#         lambda *x: sum(x) / (sum([jnp.any(k) for k in x]) + 1e-12), *grads
-#     )
-#     updates, opt_state = opt.update(grads, opt_state)
-#     if freeze_processor:
-#         params_subset = _filter_out_processor(params)
-#         assert len(params) > len(params_subset)
-#         assert params_subset
-#         updates_subset = _filter_out_processor(updates)
-#         new_params = optax.apply_updates(params_subset, updates_subset)
-#         new_params = hk.data_structures.merge(params, new_params)
-#     else:
-#         new_params = optax.apply_updates(params, updates)
-
-#     return new_params, opt_state
-
-
-# @functools.partial(jax.jit, static_argnames=["opt"])
-# def opt_update(opt, flat_grads, flat_opt_state):
-#     return opt.update(flat_grads, flat_opt_state)
-
-
-# def filter_null_grads(grads, opt, opt_state, opt_state_skeleton, algo_idx):
-#     """Compute updates ignoring params that have no gradients.
-
-#     This prevents untrained params (e.g., encoders/decoders for algorithms
-#     that are not being trained) to accumulate, e.g., momentum from spurious
-#     zero gradients.
-
-#     Note: this works as intended for "per-parameter" optimizer state, such as
-#       momentum. However, when the optimizer has some global state (such as the
-#       step counts in Adam), the global state will be updated every time,
-#       affecting also future updates of parameters that had null gradients in the
-#       current step.
-
-#     Args:
-#       grads: Gradients for all parameters.
-#       opt: Optax optimizer.
-#       opt_state: Optimizer state.
-#       opt_state_skeleton: A "skeleton" of optimizer state that has been
-#         initialized with scalar parameters. This serves to traverse each parameter
-#         of the otpimizer state during the opt state update.
-#       algo_idx: Index of algorithm, to filter out unused encoders/decoders.
-#         If None, no filtering happens.
-#     Returns:
-#       Updates and new optimizer state, where the parameters with null gradient
-#         have not been taken into account.
-#     """
-
-#     def _keep_in_algo(k, v):
-#         """Ignore params of encoders/decoders irrelevant for this algo."""
-#         # Note: in shared pointer decoder modes, we should exclude shared params
-#         #       for algos that do not have pointer outputs.
-#         if (processors.PROCESSOR_TAG in k) or (f"algo_{algo_idx}_" in k):
-#             return v
-#         return jax.tree_util.tree_map(lambda x: None, v)
-
-#     if algo_idx is None:
-#         masked_grads = grads
-#     else:
-#         masked_grads = {k: _keep_in_algo(k, v) for k, v in grads.items()}
-#     flat_grads, treedef = jax.tree_util.tree_flatten(
-#         masked_grads, is_leaf=lambda x: x is None
-#     )
-#     flat_opt_state = jax.tree_util.tree_map(
-#         lambda _, x: (
-#             x  # pylint:disable=g-long-lambda
-#             if isinstance(x, (np.ndarray, jax.Array))
-#             else treedef.flatten_up_to(x)
-#         ),
-#         opt_state_skeleton,
-#         opt_state,
-#     )
-
-#     # Compute updates only for the params with gradient.
-#     flat_updates, flat_opt_state = opt_update(opt, flat_grads, flat_opt_state)
-
-#     def unflatten(flat, original):
-#         """Restore tree structure, filling missing (None) leaves with original."""
-#         if isinstance(flat, (np.ndarray, jax.Array)):
-#             return flat
-#         return jax.tree_util.tree_map(
-#             lambda x, y: x if y is None else y, original, treedef.unflatten(flat)
-#         )
-
-#     # Restore the state and updates tree structure.
-#     new_opt_state = jax.tree_util.tree_map(
-#         lambda _, x, y: unflatten(x, y), opt_state_skeleton, flat_opt_state, opt_state
-#     )
-#     updates = unflatten(flat_updates, jax.tree_util.tree_map(lambda x: 0.0, grads))
-#     return updates, new_opt_state
 
 
 class BaselineOptimizer:
@@ -707,8 +355,7 @@ class BaselineOptimizer:
         graphdef = self.graph_def
         tx = self.tx
 
-        @jax.jit
-        def train_step_jit(params, opt_state, feedback, rng_key):
+        def train_step_f(params, opt_state, feedback, rng_key):
             def loss_fn(params):
                 model = nnx.merge(graphdef, params)
                 loss = model.feedback(rng_key, feedback)
@@ -719,6 +366,8 @@ class BaselineOptimizer:
                 params, grads, opt_state, tx
             )
             return loss, new_params, new_opt_state
+
+        train_step_jit = jax.jit(train_step_f)
 
         def train_step(model, feedback, optimizer, rng_key):
             params = model.get_params()
