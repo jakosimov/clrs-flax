@@ -1,1 +1,2 @@
 wandb>=0.19.11
+nbformat
