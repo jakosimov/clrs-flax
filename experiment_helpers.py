@@ -186,7 +186,9 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
     return mpnn_model
 
 
-def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig, log_every):
+def _initialize_wandb(
+    mpnn_config: MPNNConfig, dataset: DatasetConfig, log_every, experiment_name=None
+):
     config = {
         "epochs": mpnn_config.max_steps,
         "train_batch_size": dataset.train_batch_size,
@@ -211,6 +213,7 @@ def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig, log_every
     }
     wandb.init(
         project=f"{dataset.algorithm_name}-mpnn",
+        name=experiment_name,
         config=config,
     )
 
@@ -296,7 +299,9 @@ def train_model(
         step += 1
 
 
-def run_experiment(dataset: DatasetConfig, mpnn_config: MPNNConfig, log_every=10):
+def run_experiment(
+    dataset: DatasetConfig, mpnn_config: MPNNConfig, log_every=10, experiment_name=None
+):
     with jax.disable_jit(mpnn_config.disable_jit):
         if mpnn_config.disable_jit:
             print("JIT is disabled")
@@ -310,7 +315,9 @@ def run_experiment(dataset: DatasetConfig, mpnn_config: MPNNConfig, log_every=10
             message_weight_decay=mpnn_config.message_weight_decay,
         )
 
-        _initialize_wandb(mpnn_config, dataset, log_every=log_every)
+        _initialize_wandb(
+            mpnn_config, dataset, log_every=log_every, experiment_name=experiment_name
+        )
 
         train_model(
             model=mpnn_model,
