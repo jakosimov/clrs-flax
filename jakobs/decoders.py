@@ -211,10 +211,10 @@ def construct_decoders_flax(
     loc: str, t: str, hidden_dim: int, nb_dims: int, name: str, rngs: nnx.Rngs
 ) -> Decoder:
     """Constructs decoders."""
-    h_t_dim = 96
-    edge_fts_dim = 32
-    gr_emb_dim = 32
-    graph_fts_dim = 32
+    h_t_dim = 3 * hidden_dim
+    edge_fts_dim = hidden_dim
+    gr_emb_dim = hidden_dim
+    graph_fts_dim = hidden_dim
     # linear = lambda out_dims: nnx.Linear(hidden_dim, out_dims, rngs=rngs)
     if loc == _Location.NODE:
         # Node decoders.

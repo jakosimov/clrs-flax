@@ -304,20 +304,47 @@ def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
 
 
 class BaselineOptimizer:
-    def __init__(self, model, backbone_lr: float = 1e-2, decoder_lr: float = 1e-5):
+    def __init__(
+        self,
+        model,
+        backbone_lr: float = 1e-2,
+        decoder_lr: float = 1e-5,
+        encoder_lr: float = 1e-2,
+        message_weight_decay: float = 1e-4,
+    ):
         self.model = model
         graph_def, params_state = nnx.split(model)
         self.graph_def = graph_def
         params = nnx.to_pure_dict(params_state)
 
+        DECODER = "decoders"
+        PROCESSOR = "processor"
+        ENCODER = "encoders"
+        MESSAGE = "message_modules"
+
         optimizers = {
-            "backbone": optax.adam(learning_rate=backbone_lr),
-            "decoder": optax.adam(learning_rate=decoder_lr),
+            PROCESSOR: self._mk_grad_clip_optimizer(learning_rate=backbone_lr),
+            DECODER: self._mk_grad_clip_optimizer(learning_rate=decoder_lr),
+            ENCODER: self._mk_grad_clip_optimizer(learning_rate=encoder_lr),
+            MESSAGE: self._mk_grad_clip_optimizer(
+                learning_rate=backbone_lr, weight_decay=message_weight_decay
+            ),
         }
         param_labels = traverse_util.path_aware_map(
-            lambda path, _: "decoder" if "decoders" in path else "backbone",
+            lambda path, _: (
+                DECODER
+                if DECODER in path
+                else (
+                    ENCODER
+                    if ENCODER in path
+                    else MESSAGE if MESSAGE in path else PROCESSOR
+                )
+            ),
             params,
         )
+
+        # for path, label in traverse_util.flatten_dict(param_labels).items():
+        #     print(path, "->", label)
 
         self.tx: optax.GradientTransformationExtraArgs = optax.multi_transform(
             optimizers, param_labels
@@ -340,16 +367,17 @@ class BaselineOptimizer:
         new_params = optax.apply_updates(params, updates)
         return new_params, new_opt_state
 
-    def _mk_grad_clip_optimizer(self, grad_clip_max_norm: float, learning_rate: float):
+    def _mk_grad_clip_optimizer(
+        self, learning_rate: float, grad_clip_max_norm: float = 1.0, weight_decay=0.0
+    ):
+        optax_chain = []
+        if weight_decay > 0:
+            optax_chain.append(optax.add_decayed_weights(weight_decay))
         if grad_clip_max_norm > 0:
-            optax_chain = [
-                optax.clip_by_global_norm(grad_clip_max_norm),
-                optax.scale_by_adam(),
-                optax.scale(-learning_rate),
-            ]
-            return optax.chain(*optax_chain)
-        else:
-            return optax.adam(learning_rate=learning_rate)
+            optax_chain.append(optax.clip_by_global_norm(grad_clip_max_norm))
+        optax_chain.append(optax.scale_by_adam())
+        optax_chain.append(optax.scale(-learning_rate))
+        return optax.chain(*optax_chain)
 
     def make_train_step(self):
         graphdef = self.graph_def
@@ -365,17 +393,21 @@ class BaselineOptimizer:
             new_params, new_opt_state = BaselineOptimizer.apply_updates(
                 params, grads, opt_state, tx
             )
-            return loss, new_params, new_opt_state
+            grad_squares = [
+                jnp.mean(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)
+            ]
+            grad_magnitude = sum(grad_squares) ** 0.5
+            return loss, grad_magnitude, new_params, new_opt_state
 
         train_step_jit = jax.jit(train_step_f)
 
         def train_step(model, feedback, optimizer, rng_key):
             params = model.get_params()
-            loss, new_params, new_opt_state = train_step_jit(
+            loss, grad_magnitude, new_params, new_opt_state = train_step_jit(
                 params, optimizer.state, feedback, rng_key
             )
             model.update_model_params(new_params)
             optimizer.state = new_opt_state
-            return loss
+            return loss, grad_magnitude
 
         return train_step

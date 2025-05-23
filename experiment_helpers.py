@@ -149,47 +149,52 @@ class MPNNConfig:
     aggregation_modes: list[AggregationMode] = [AggregationMode.MAX]
     decoder_learning_rate: float = 1e-5
     backbone_learning_rate: float = 1e-3
+    encoder_learning_rate: float = 1e-3
+    message_weight_decay: float = 0.0
     max_steps: int = 1000
     disable_jit: bool = False
+    hint_teacher_forcing: float = 0.0
+    hidden_dim: int = 32
+    dropout_prob: float = 0.0
+    nb_heads: int = 4
 
 
-def make_mpnn_model(mpnn_config, dataset):
+def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
     mpnn_processor_factory = processors.get_processor_factory(
         processors.ProcessorKind.MPNN,
         use_ln=True,
         nb_triplet_fts=32,
-        nb_heads=4,
+        nb_heads=mpnn_config.nb_heads,
         reduction=mpnn_config.aggregation_modes,
     )
 
-    mpnn_model_params = dict(
+    rngs = nnx.Rngs(params=10, dropout=random.key(1))
+    mpnn_model = baselines.BaselineModel(
         processor_factory=mpnn_processor_factory,
-        hidden_dim=32,
+        spec=dataset.get_spec(),
+        dummy_trajectory=dataset.get_dummy_trajectory(),
+        hidden_dim=mpnn_config.hidden_dim,
         encode_hints=True,
         decode_hints=True,
         use_lstm=False,
         checkpoint_path="/tmp/checkpt",
         freeze_processor=False,
-        dropout_prob=0.0,
-    )
-
-    rngs = nnx.Rngs(params=0, dropout=random.key(1))
-    mpnn_model = baselines.BaselineModel(
-        spec=dataset.get_spec(),
-        dummy_trajectory=dataset.get_dummy_trajectory(),
+        dropout_prob=mpnn_config.dropout_prob,
+        hint_teacher_forcing=mpnn_config.hint_teacher_forcing,
         rngs=rngs,
-        **mpnn_model_params,
     )
     return mpnn_model
 
 
-def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig):
+def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig, log_every):
     config = {
         "epochs": mpnn_config.max_steps,
         "train_batch_size": dataset.train_batch_size,
         "test_batch_size": dataset.test_batch_size,
         "decoder_learning_rate": mpnn_config.decoder_learning_rate,
-        "backbone_learning_rate": mpnn_config.backbone_learning_rate,
+        "processor_learning_rate": mpnn_config.backbone_learning_rate,
+        "encoder_learning_rate": mpnn_config.encoder_learning_rate,
+        "message_weight_decay": mpnn_config.message_weight_decay,
         "aggregation_modes": [mode.name for mode in mpnn_config.aggregation_modes],
         "algorithm": dataset.algorithm_name,
         "num_training_samples": dataset.num_samples,
@@ -198,6 +203,11 @@ def _initialize_wandb(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         "disable_jit": mpnn_config.disable_jit,
         "device_kind": jax.devices()[-1].device_kind,
         "test_length": dataset.test_length,
+        "log_every": log_every,
+        "hint_teacher_forcing": mpnn_config.hint_teacher_forcing,
+        "hidden_dim": mpnn_config.hidden_dim,
+        "dropout_prob": mpnn_config.dropout_prob,
+        "nb_heads": mpnn_config.nb_heads,
     }
     wandb.init(
         project=f"{dataset.algorithm_name}-mpnn",
@@ -213,6 +223,7 @@ def evaluate_model(
     step,
     rng_key,
     cur_loss,
+    grad_magnitude,
 ):
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
     out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
@@ -226,12 +237,13 @@ def evaluate_model(
             "loss": float(cur_loss),  # training loss
             "val_acc": float(val_acc),  # validation accuracy
             "test_acc": float(test_acc),  # test accuracy
+            "grad_magnitude": float(grad_magnitude),  # gradient magnitude
         },
         step=step,
     )
 
     print(
-        f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
+        f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']} | grad_magnitude = {grad_magnitude}"
     )
 
 
@@ -256,6 +268,7 @@ def train_model(
     optimizer,
     train_step=None,
     max_steps=1000,
+    log_every=10,
 ):
     if train_step is None:
         train_step = optimizer.make_train_step()
@@ -268,27 +281,22 @@ def train_model(
             next(test_sampler),
         )
         rng_key, new_rng_key = jax.random.split(rng_key)
-        cur_loss = train_step(
+        cur_loss, grad_magnitude = train_step(
             model=model,
             feedback=feedback,
             optimizer=optimizer,
             rng_key=rng_key,
         )
         rng_key = new_rng_key
-        if step % 10 == 0:
+        if step % log_every == 0:
             evaluate_model(
-                model,
-                feedback,
-                test_feedback,
-                step,
-                rng_key,
-                cur_loss,
+                model, feedback, test_feedback, step, rng_key, cur_loss, grad_magnitude
             )
 
         step += 1
 
 
-def run_experiment(dataset, mpnn_config):
+def run_experiment(dataset: DatasetConfig, mpnn_config: MPNNConfig, log_every=10):
     with jax.disable_jit(mpnn_config.disable_jit):
         if mpnn_config.disable_jit:
             print("JIT is disabled")
@@ -298,9 +306,11 @@ def run_experiment(dataset, mpnn_config):
             mpnn_model,
             backbone_lr=mpnn_config.backbone_learning_rate,
             decoder_lr=mpnn_config.decoder_learning_rate,
+            encoder_lr=mpnn_config.encoder_learning_rate,
+            message_weight_decay=mpnn_config.message_weight_decay,
         )
 
-        _initialize_wandb(mpnn_config, dataset)
+        _initialize_wandb(mpnn_config, dataset, log_every=log_every)
 
         train_model(
             model=mpnn_model,
@@ -308,5 +318,6 @@ def run_experiment(dataset, mpnn_config):
             test_sampler=test_sampler,
             optimizer=optimizer,
             max_steps=mpnn_config.max_steps,
+            log_every=log_every,
         )
         wandb.finish()
