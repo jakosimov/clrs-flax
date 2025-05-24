@@ -73,6 +73,10 @@ class Processor(nnx.Module):
     def inf_bias_edge(self):
         return False
 
+    @property
+    def using_triplets(self):
+        return False
+
 
 class GAT(Processor):
     """Graph Attention Network (Velickovic et al., ICLR 2018)."""
@@ -417,14 +421,21 @@ class GATv2Full(GATv2):
 class TripletMessageModule(nnx.Module):
     """Triplet message module."""
 
-    def __init__(self, nb_triplet_fts: int, rngs: nnx.Rngs):
-        self.t_1 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_2 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_3 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_e_1 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_e_2 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_e_3 = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
-        self.t_g = nnx.Linear(nb_triplet_fts, nb_triplet_fts, rngs=rngs)
+    def __init__(
+        self,
+        nb_triplet_fts: int,
+        z_size: int,
+        edge_fts_size: int,
+        graph_fts_size: int,
+        rngs: nnx.Rngs,
+    ):
+        self.t_1 = nnx.Linear(z_size, nb_triplet_fts, rngs=rngs)
+        self.t_2 = nnx.Linear(z_size, nb_triplet_fts, rngs=rngs)
+        self.t_3 = nnx.Linear(z_size, nb_triplet_fts, rngs=rngs)
+        self.t_e_1 = nnx.Linear(edge_fts_size, nb_triplet_fts, rngs=rngs)
+        self.t_e_2 = nnx.Linear(edge_fts_size, nb_triplet_fts, rngs=rngs)
+        self.t_e_3 = nnx.Linear(edge_fts_size, nb_triplet_fts, rngs=rngs)
+        self.t_g = nnx.Linear(graph_fts_size, nb_triplet_fts, rngs=rngs)
 
     def __call__(self, z, edge_fts, graph_fts):
         """Triplet messages, as done by Dudzik and Velickovic (2022)."""
@@ -492,7 +503,7 @@ class MessageModule(nnx.Module):
         self.m_e = nnx.Linear(edge_fts_size, self.mid_size, rngs=rngs)
         self.m_g = nnx.Linear(graph_fts_size, self.mid_size, rngs=rngs)
         if msg_mlp_sizes is not None:
-            self.msg_mlp_sizes_transform = MLP(
+            self.msg_mlp_transform = MLP(
                 in_size=self.mid_size, sizes=msg_mlp_sizes, rngs=rngs
             )
 
@@ -509,7 +520,7 @@ class MessageModule(nnx.Module):
         )
 
         if self.msg_mlp_sizes is not None:
-            msgs = self.msg_mlp_sizes_transform(jax.nn.relu(msgs))  # (B, N, N, H)
+            msgs = self.msg_mlp_transform(jax.nn.relu(msgs))  # (B, N, N, H)
 
         if self.mid_act is not None:
             msgs = self.mid_act(msgs)  # (B, N, N, H)
@@ -596,8 +607,14 @@ class PGN(Processor):
         ]
 
         if self.use_triplets:
-            self.triplet_module = TripletMessageModule(nb_triplet_fts, rngs=rngs)
-            self.o3 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
+            self.triplet_module = TripletMessageModule(
+                nb_triplet_fts=nb_triplet_fts,
+                z_size=z_size,
+                edge_fts_size=edge_fts_size,
+                graph_fts_size=graph_fts_size,
+                rngs=rngs,
+            )
+            self.o3 = nnx.Linear(nb_triplet_fts, self.out_size, rngs=rngs)
 
         self.o1 = nnx.Linear(z_size, self.out_size, rngs=rngs)
         self.o2 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
@@ -613,10 +630,13 @@ class PGN(Processor):
             )
 
         if self.gated:
-            self.gate1 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
+            self.gate1 = nnx.Linear(z_size, self.out_size, rngs=rngs)
             self.gate2 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
             self.gate3 = nnx.Linear(
-                self.out_size, self.out_size, rngs=rngs
+                self.out_size,
+                self.out_size,
+                rngs=rngs,
+                bias_init=jax.nn.initializers.constant(-3.0),
             )  # Initialise bias to -3
 
     def message(self, z: Array, edge_fts: Array, graph_fts: Array) -> List[Array]:
@@ -727,6 +747,11 @@ class PGN(Processor):
             ret = ret * gate + hidden * (1 - gate)
 
         return ret, tri_msgs  # pytype: disable=bad-return-type  # numpy-scalars
+
+    @property
+    def using_triplets(self) -> bool:
+        """Whether to use triplet messages."""
+        return self.use_triplets
 
 
 class DeepSets(PGN):

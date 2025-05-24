@@ -208,11 +208,18 @@ class GraphPointerDecoder(Decoder):
 
 
 def construct_decoders_flax(
-    loc: str, t: str, hidden_dim: int, nb_dims: int, name: str, rngs: nnx.Rngs
+    loc: str,
+    t: str,
+    hidden_dim: int,
+    nb_dims: int,
+    name: str,
+    rngs: nnx.Rngs,
+    edge_fts_dim: int | None = None,
 ) -> Decoder:
     """Constructs decoders."""
     h_t_dim = 3 * hidden_dim
-    edge_fts_dim = hidden_dim
+    if edge_fts_dim is None:
+        edge_fts_dim = hidden_dim
     gr_emb_dim = hidden_dim
     graph_fts_dim = hidden_dim
     # linear = lambda out_dims: nnx.Linear(hidden_dim, out_dims, rngs=rngs)

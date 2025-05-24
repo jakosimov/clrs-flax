@@ -179,16 +179,39 @@ class MPNNConfig:
     hint_teacher_forcing: float = 0.0
     hidden_dim: int = 32
     dropout_prob: float = 0.0
-    nb_heads: int = 4
+    gated: bool = False
+    use_triplets: bool = False
+
+
+def make_mpnn_processor_factory(
+    use_ln: bool = True,
+    aggregation_modes: list[AggregationMode] = [AggregationMode.MAX],
+    use_triplets: bool = False,
+    nb_triplet_fts: int = 32,
+    gated: bool = True,
+):
+    def _factory(out_size: int, rngs: nnx.Rngs):
+        return processors.MPNN(
+            out_size=out_size,
+            msgs_mlp_sizes=[out_size, out_size],
+            use_ln=use_ln,
+            use_triplets=use_triplets,
+            nb_triplet_fts=nb_triplet_fts,
+            gated=gated,
+            rngs=rngs,
+            reduction_modes=aggregation_modes,
+        )
+
+    return _factory
 
 
 def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
-    mpnn_processor_factory = processors.get_processor_factory(
-        processors.ProcessorKind.MPNN,
+    mpnn_processor_factory = make_mpnn_processor_factory(
         use_ln=True,
-        nb_triplet_fts=32,
-        nb_heads=mpnn_config.nb_heads,
-        reduction=mpnn_config.aggregation_modes,
+        aggregation_modes=mpnn_config.aggregation_modes,
+        use_triplets=mpnn_config.use_triplets,
+        nb_triplet_fts=mpnn_config.hidden_dim,
+        gated=mpnn_config.gated,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -233,7 +256,8 @@ def _initialize_wandb(
         "hint_teacher_forcing": mpnn_config.hint_teacher_forcing,
         "hidden_dim": mpnn_config.hidden_dim,
         "dropout_prob": mpnn_config.dropout_prob,
-        "nb_heads": mpnn_config.nb_heads,
+        "use_triplets": mpnn_config.use_triplets,
+        "gated": mpnn_config.gated,
     }
     wandb.init(
         project=f"{dataset.algorithm_name}-mpnn",

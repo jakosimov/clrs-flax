@@ -105,12 +105,13 @@ class NetFlax(nnx.Module):
         self.nb_msg_passing_steps: int = nb_msg_passing_steps
         self.debug: bool = debug
 
-        encoders, decoders = self._construct_encoders_decoders(rngs)
-        self.encoders: List[Dict[str, Encoder]] = encoders
-        self.decoders: List[Dict[str, Decoder]] = decoders
         self.processor: processors.Processor = self.processor_factory(
             self.hidden_dim, rngs
         )
+
+        encoders, decoders = self._construct_encoders_decoders(rngs)
+        self.encoders: List[Dict[str, Encoder]] = encoders
+        self.decoders: List[Dict[str, Decoder]] = decoders
 
         self.algorithm_indices: List[int] = list(range(len(spec)))
 
@@ -123,6 +124,11 @@ class NetFlax(nnx.Module):
         """Constructs encoders and decoders, separate for each algorithm."""
         encoders_: list[dict[str, Encoder]] = []
         decoders_: list[dict[str, Decoder]] = []
+        edge_fts_size = (
+            self.hidden_dim
+            if not self.processor.using_triplets
+            else 2 * self.hidden_dim
+        )
         enc_algo_idx = None
         for algo_idx, spec in enumerate(self.spec):
             enc: dict[str, Encoder] = {}
@@ -152,12 +158,13 @@ class NetFlax(nnx.Module):
                 ):
                     # Build output decoders.
                     dec[name] = decoders.construct_decoders_flax(
-                        loc,
-                        t,
+                        loc=loc,
+                        t=t,
                         hidden_dim=self.hidden_dim,
                         nb_dims=self.nb_dims[algo_idx][name],
                         name=f"algo_{algo_idx}_{name}",
                         rngs=rngs,
+                        edge_fts_dim=edge_fts_size,
                     )
             encoders_.append(enc)
             decoders_.append(dec)
