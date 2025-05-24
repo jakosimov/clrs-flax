@@ -1,4 +1,5 @@
 import os
+from typing import Any
 import jax
 
 from attr import dataclass
@@ -17,6 +18,13 @@ from jakobs.processors import AggregationMode
 
 def _iterate_sampler(sampler, batch_size):
     while True:
+        yield sampler.next(batch_size)
+
+
+def _iterate_samplers(samplers: list[Any], batch_size):
+    while True:
+        sampler_index = np.random.randint(0, len(samplers))
+        sampler = samplers[sampler_index]
         yield sampler.next(batch_size)
 
 
@@ -75,27 +83,42 @@ class DatasetConfig:
         train_batch_size,
         num_test_samples,
         test_batch_size=None,
+        min_test_length=4,
     ):
         self.algorithm_name = algorithm_name
         self.num_samples = num_samples
-        self.length = length
+        self.max_train_length = length
         self.train_batch_size = train_batch_size
         if test_batch_size is None:
             test_batch_size = num_test_samples
         self.test_batch_size = test_batch_size
         self.num_test_samples = num_test_samples
         self.test_length = length * test_length_multiplier
-        self.train_sampler = None
+        self.train_samplers: list[Any] = []
         self.test_sampler = None
+        self.spec = None
+        self.min_train_length = min_test_length
 
-    def generate_train_sampler(self):
-        if self.train_sampler is not None:
+    def generate_train_samplers(self):
+        if len(self.train_samplers) > 0:
+            # Already generated
             return
-        self.train_sampler, self.spec = _get_sampler(
-            name=self.algorithm_name,
-            num_samples=self.num_samples,
-            length=self.length,
-        )
+        for i in range(self.min_train_length, self.max_train_length + 1):
+            # Generate samplers for each length from min_test_length to length
+            sampler, spec = _get_sampler(
+                name=self.algorithm_name,
+                num_samples=self.num_samples,
+                length=i,
+            )
+            self.train_samplers.append(sampler)
+        self.spec = spec
+        # if self.train_samplers is not None:
+        #     return
+        # self.train_samplers, self.spec = _get_sampler(
+        #     name=self.algorithm_name,
+        #     num_samples=self.num_samples,
+        #     length=self.length,
+        # )
         # print(
         #     "Generated train sampler for algorithm:",
         #     self.algorithm_name,
@@ -123,8 +146,8 @@ class DatasetConfig:
         # )
 
     def get_train_sampler(self):
-        self.generate_train_sampler()
-        return _iterate_sampler(self.train_sampler, batch_size=self.train_batch_size)
+        self.generate_train_samplers()
+        return _iterate_samplers(self.train_samplers, batch_size=self.train_batch_size)
 
     def get_test_sampler(self):
         self.generate_test_sampler()
@@ -134,7 +157,7 @@ class DatasetConfig:
         return self.get_train_sampler(), self.get_test_sampler()
 
     def get_spec(self):
-        self.generate_train_sampler()
+        self.generate_train_samplers()
         return self.spec
 
     def get_dummy_trajectory(self):
@@ -201,7 +224,8 @@ def _initialize_wandb(
         "algorithm": dataset.algorithm_name,
         "num_training_samples": dataset.num_samples,
         "num_test_samples": dataset.num_test_samples,
-        "graph_size": dataset.length,
+        "min_train_graph_size": dataset.min_train_length,
+        "max_train_graph_size": dataset.max_train_length,
         "disable_jit": mpnn_config.disable_jit,
         "device_kind": jax.devices()[-1].device_kind,
         "test_length": dataset.test_length,
@@ -227,6 +251,7 @@ def evaluate_model(
     rng_key,
     cur_loss,
     grad_magnitude,
+    log_to_wandb=True,
 ):
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
     out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
@@ -235,15 +260,16 @@ def evaluate_model(
 
     val_acc = out_val["score"]
     test_acc = out["score"]
-    wandb.log(
-        {
-            "loss": float(cur_loss),  # training loss
-            "val_acc": float(val_acc),  # validation accuracy
-            "test_acc": float(test_acc),  # test accuracy
-            "grad_magnitude": float(grad_magnitude),  # gradient magnitude
-        },
-        step=step,
-    )
+    if log_to_wandb:
+        wandb.log(
+            {
+                "loss": float(cur_loss),  # training loss
+                "val_acc": float(val_acc),  # validation accuracy
+                "test_acc": float(test_acc),  # test accuracy
+                "grad_magnitude": float(grad_magnitude),  # gradient magnitude
+            },
+            step=step,
+        )
 
     print(
         f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']} | grad_magnitude = {grad_magnitude}"
@@ -264,11 +290,31 @@ def _old_train_step(
     return cur_loss
 
 
+from flax import serialization
+
+
+def save_to_wandb(step, data, data_name):
+    ckpt_bytes = serialization.to_bytes(
+        data
+    )  # Produces a bytes object [oai_citation:2‡flax-linen.readthedocs.io](https://flax-linen.readthedocs.io/en/latest/api_reference/flax.serialization.html#:~:text=Save%20optimizer%20or%20other%20object,dict)
+    filename = f"{data_name}_checkpoint_step{step}.msgpack"
+    with open(filename, "wb") as f:
+        f.write(ckpt_bytes)  # write the bytes from serialization.to_bytes
+
+    # Create a W&B artifact and add the file
+    artifact = wandb.Artifact(name=f"{data_name}-model-checkpoint", type="model")
+    artifact.add_file(filename)  # attach the checkpoint file to the artifact
+    # (You could also use artifact.new_file() to write bytes directly without a temp file)
+
+    # Log the artifact to W&B
+    wandb.log_artifact(artifact, aliases=[f"step_{step}", "latest"])
+
+
 def train_model(
-    model,
+    model: baselines.BaselineModel,
     train_sampler,
     test_sampler,
-    optimizer,
+    optimizer: baselines.BaselineOptimizer,
     train_step=None,
     max_steps=1000,
     log_every=10,
@@ -295,6 +341,11 @@ def train_model(
             evaluate_model(
                 model, feedback, test_feedback, step, rng_key, cur_loss, grad_magnitude
             )
+        if step % (log_every * 10) == 0:
+            _, param_state = nnx.split(model)
+            params = nnx.to_pure_dict(param_state)
+            save_to_wandb(step, params, "params")
+            save_to_wandb(step, optimizer.state, "optimizer_state")
 
         step += 1
 
