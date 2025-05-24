@@ -330,6 +330,7 @@ class BaselineOptimizer:
                 learning_rate=backbone_lr, weight_decay=message_weight_decay
             ),
         }
+
         param_labels = traverse_util.path_aware_map(
             lambda path, _: (
                 DECODER
@@ -343,8 +344,10 @@ class BaselineOptimizer:
             params,
         )
 
-        # for path, label in traverse_util.flatten_dict(param_labels).items():
-        #     print(path, "->", label)
+        self.param_labels = {
+            "/".join(map(str, path)): label
+            for path, label in traverse_util.flatten_dict(param_labels).items()
+        }
 
         self.tx: optax.GradientTransformationExtraArgs = optax.multi_transform(
             optimizers, param_labels
@@ -361,8 +364,6 @@ class BaselineOptimizer:
 
     @staticmethod
     def apply_updates(params, grads, opt_state, tx):
-        """Apply updates to the model parameters."""
-        # params = nnx.to_pure_dict(params_state)
         updates, new_opt_state = tx.update(grads, opt_state, params)
         new_params = optax.apply_updates(params, updates)
         return new_params, new_opt_state
@@ -379,9 +380,34 @@ class BaselineOptimizer:
         optax_chain.append(optax.scale(-learning_rate))
         return optax.chain(*optax_chain)
 
+    def _compute_grad_magnitudes(self, grads):
+        grad_sums = {label: 0.0 for label in set(self.param_labels.values())}
+        grad_counts = {label: 0 for label in set(self.param_labels.values())}
+        flat_grads = {
+            "/".join(map(str, path)): value
+            for path, value in traverse_util.flatten_dict(grads).items()
+        }
+        for path, grad in flat_grads.items():
+            label = self.param_labels.get(path, "processor")
+            if grad is not None:
+                grad_norm = jnp.linalg.norm(jnp.ravel(grad))
+                grad_sums[label] += grad_norm
+                grad_counts[label] += 1
+
+        # Compute mean gradient magnitude per group
+        grad_means = {
+            label: (
+                grad_sums[label] / grad_counts[label] if grad_counts[label] > 0 else 0.0
+            )
+            for label in grad_sums
+        }
+
+        return grad_means
+
     def make_train_step(self):
         graphdef = self.graph_def
         tx = self.tx
+        compute_grad_magnitudes = self._compute_grad_magnitudes
 
         def train_step_f(params, opt_state, feedback, rng_key):
             def loss_fn(params):
@@ -393,21 +419,18 @@ class BaselineOptimizer:
             new_params, new_opt_state = BaselineOptimizer.apply_updates(
                 params, grads, opt_state, tx
             )
-            grad_squares = [
-                jnp.mean(jnp.square(g)) for g in jax.tree_util.tree_leaves(grads)
-            ]
-            grad_magnitude = sum(grad_squares) ** 0.5
-            return loss, grad_magnitude, new_params, new_opt_state
+            grad_mags = compute_grad_magnitudes(grads)
+            return loss, grad_mags, new_params, new_opt_state
 
         train_step_jit = jax.jit(train_step_f)
 
         def train_step(model, feedback, optimizer, rng_key):
             params = model.get_params()
-            loss, grad_magnitude, new_params, new_opt_state = train_step_jit(
+            loss, grad_mags, new_params, new_opt_state = train_step_jit(
                 params, optimizer.state, feedback, rng_key
             )
             model.update_model_params(new_params)
             optimizer.state = new_opt_state
-            return loss, grad_magnitude
+            return loss, grad_mags
 
         return train_step

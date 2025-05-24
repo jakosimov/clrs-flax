@@ -23,3 +23,5 @@ venv/
 
 samplers/
 wandb/
+
+*.msgpack

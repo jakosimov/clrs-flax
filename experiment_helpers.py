@@ -274,7 +274,7 @@ def evaluate_model(
     step,
     rng_key,
     cur_loss,
-    grad_magnitude,
+    grad_magnitudes,
     log_to_wandb=True,
 ):
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
@@ -284,19 +284,34 @@ def evaluate_model(
 
     val_acc = out_val["score"]
     test_acc = out["score"]
+    decoder_magnitude = grad_magnitudes["decoders"]
+    encoder_magnitude = grad_magnitudes["encoders"]
+    processor_magnitude = grad_magnitudes["processor"]
+    messages_magnitude = grad_magnitudes["message_modules"]
     if log_to_wandb:
         wandb.log(
             {
                 "loss": float(cur_loss),  # training loss
                 "val_acc": float(val_acc),  # validation accuracy
                 "test_acc": float(test_acc),  # test accuracy
-                "grad_magnitude": float(grad_magnitude),  # gradient magnitude
+                "decoder_magnitude": float(
+                    decoder_magnitude
+                ),  # decoder gradient magnitude
+                "encoder_magnitude": float(
+                    encoder_magnitude
+                ),  # encoder gradient magnitude
+                "processor_magnitude": float(
+                    processor_magnitude
+                ),  # processor gradient magnitude
+                "messages_magnitude": float(
+                    messages_magnitude
+                ),  # messages gradient magnitude
             },
             step=step,
         )
 
     print(
-        f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']} | grad_magnitude = {grad_magnitude}"
+        f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
     )
 
 
@@ -354,7 +369,7 @@ def train_model(
             next(test_sampler),
         )
         rng_key, new_rng_key = jax.random.split(rng_key)
-        cur_loss, grad_magnitude = train_step(
+        cur_loss, grad_magnitudes = train_step(
             model=model,
             feedback=feedback,
             optimizer=optimizer,
@@ -363,7 +378,7 @@ def train_model(
         rng_key = new_rng_key
         if step % log_every == 0:
             evaluate_model(
-                model, feedback, test_feedback, step, rng_key, cur_loss, grad_magnitude
+                model, feedback, test_feedback, step, rng_key, cur_loss, grad_magnitudes
             )
         if step % (log_every * 10) == 0:
             _, param_state = nnx.split(model)
