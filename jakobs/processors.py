@@ -572,6 +572,55 @@ class DifferentialMessageModule(MessageModule):
         return msgs
 
 
+def smooth_floor(x, k=10.0, n_min=None, n_max=None):
+    """
+    Approximates floor(x) using a sum of sigmoid steps.
+
+    Args:
+        x: A scalar or JAX array of real values.
+        k: Sharpness of the sigmoid (higher = closer to hard floor).
+        n_range: How many integer steps to consider on either side of x.
+
+    Returns:
+        A smooth approximation to floor(x).
+    """
+    # Determine the integer range around x to evaluate sigmoids
+    # x_floor = jnp.floor(x)
+    if n_min is None or n_max is None:
+        # If not provided, calculate min and max based on x
+        # This assumes x is a JAX array
+        x_min = jnp.min(x) - 1
+        x_max = jnp.max(x) + 1
+
+        n_min = jnp.floor(x_min)
+        n_max = jnp.ceil(x_max)
+
+    # Create a range of integers to sum over
+    n_vals = jnp.arange(n_min, n_max)
+
+    # Broadcast and compute sigmoids
+    sigmoid_terms = jax.nn.sigmoid(k * (x[..., None] - n_vals))
+
+    # Sum sigmoids and subtract 0.5 to center at floor(x)
+    return jnp.sum(sigmoid_terms, axis=-1) + n_min - 1
+
+
+def differentiable_mod(x, n, k=50.0, n_min=None, n_max=None):
+    """
+    Computes a differentiable version of the modulus operation.
+
+    Args:
+        x: A scalar or JAX array of real values.
+        n: The modulus base (should be a positive integer).
+
+    Returns:
+        A smooth approximation to x % n.
+    """
+    # Compute the smooth floor and then use it to compute the mod
+    smooth_floor_val = smooth_floor(x / n, k=k, n_min=n_min, n_max=n_max)
+    return x - n * smooth_floor_val
+
+
 class AggregationMode(StrEnum):
     """Aggregation modes for the processor."""
 
@@ -579,6 +628,7 @@ class AggregationMode(StrEnum):
     MAX = "max"
     SUM = "sum"
     MIN = "min"
+    MOD_SUM = "mod_sum"
 
 
 def sum_aggr(msgs: Array, adj_mat: Array) -> Array:
@@ -602,6 +652,14 @@ def mean_aggr(msgs: Array, adj_mat: Array) -> Array:
     """Mean aggregation function."""
     msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
     msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+    return msgs
+
+
+def mod_sum_aggr(msgs: Array, adj_mat: Array, n: int) -> Array:
+    """Modulus sum aggregation function."""
+    msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+    # n_nodes = adj_mat.shape[-1]
+    msgs = differentiable_mod(msgs, n, n_min=-100, n_max=100)
     return msgs
 
 
@@ -711,18 +769,15 @@ class PGN(Processor):
 
     def aggregate_one(self, msgs: Array, adj_mat: Array, reduction: AggregationMode):
         if reduction == AggregationMode.MEAN:
-            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-            msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+            msgs = sum_aggr(msgs, adj_mat)
         elif reduction == AggregationMode.MAX:
-            maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
-            msgs = jnp.max(maxarg, axis=1)
+            msgs = max_aggr(msgs, adj_mat)
         elif reduction == AggregationMode.SUM:
-            msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+            msgs = sum_aggr(msgs, adj_mat)
         elif reduction == AggregationMode.MIN:
-            minarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, BIG_NUMBER)
-            msgs = jnp.min(minarg, axis=1)
-        # else:
-        #     msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+            msgs = min_aggr(msgs, adj_mat)
+        elif reduction == AggregationMode.MOD_SUM:
+            msgs = mod_sum_aggr(msgs, adj_mat, n=2)
         return msgs
 
     def aggregate(self, msgs: list[Array], adj_mat: Array):
