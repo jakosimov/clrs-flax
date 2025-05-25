@@ -299,6 +299,13 @@ def evaluate_model(
     encoder_magnitude = grad_magnitudes["encoders"]
     processor_magnitude = grad_magnitudes["processor"]
     messages_magnitude = grad_magnitudes["message_modules"]
+
+    message_weights = model.net.processor.message_weights
+    message_weights = [float(val) for val in message_weights]
+    message_weights_dict = {
+        f"message_weights_{i}": val for i, val in enumerate(message_weights)
+    }
+
     if log_to_wandb:
         wandb.log(
             {
@@ -317,12 +324,18 @@ def evaluate_model(
                 "messages_magnitude": float(
                     messages_magnitude
                 ),  # messages gradient magnitude
+                **message_weights_dict,  # message weights
             },
             step=step,
         )
 
     print(
         f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
+    )
+    print(
+        " | ".join(
+            [f"{key} = {value:.4f}" for key, value in message_weights_dict.items()]
+        )  # message weights
     )
 
 
