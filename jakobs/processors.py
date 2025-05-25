@@ -21,7 +21,6 @@ from typing import Any, Callable, List, Optional, Tuple
 
 import jax
 import jax.numpy as jnp
-import numpy as np
 import flax.nnx as nnx
 from jax import Array
 
@@ -482,6 +481,12 @@ class MLP(nnx.Module):
 
 
 class MessageModule(nnx.Module):
+    def __call__(self, z: Array, edge_fts: Array, graph_fts: Array) -> Array:
+        """Message module."""
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+
+class SingleMessageModule(MessageModule):
     """Message module."""
 
     def __init__(
@@ -528,12 +533,52 @@ class MessageModule(nnx.Module):
         return msgs
 
 
+class DifferentialMessageModule(MessageModule):
+    def __init__(
+        self,
+        z_size: int,
+        edge_fts_size: int,
+        graph_fts_size: int,
+        mid_size: int,
+        rngs: nnx.Rngs,
+        msg_mlp_sizes: Optional[List[int]] = None,
+        mid_act: Optional[_Fn] = None,
+    ):
+        super().__init__()
+        self.positive_module = SingleMessageModule(
+            z_size=z_size,
+            edge_fts_size=edge_fts_size,
+            graph_fts_size=graph_fts_size,
+            mid_size=mid_size,
+            rngs=rngs,
+            msg_mlp_sizes=msg_mlp_sizes,
+            mid_act=mid_act,
+        )
+        self.negative_module = SingleMessageModule(
+            z_size=z_size,
+            edge_fts_size=edge_fts_size,
+            graph_fts_size=graph_fts_size,
+            mid_size=mid_size,
+            rngs=rngs,
+            msg_mlp_sizes=msg_mlp_sizes,
+            mid_act=mid_act,
+        )
+
+    def __call__(self, z: Array, edge_fts: Array, graph_fts: Array) -> Array:
+        """Differential message module."""
+        pos_msgs = self.positive_module(z, edge_fts, graph_fts)
+        neg_msgs = self.negative_module(z, edge_fts, graph_fts)
+        msgs = pos_msgs - neg_msgs
+        return msgs
+
+
 class AggregationMode(StrEnum):
     """Aggregation modes for the processor."""
 
     MEAN = "mean"
     MAX = "max"
     SUM = "sum"
+    MIN = "min"
 
 
 def sum_aggr(msgs: Array, adj_mat: Array) -> Array:
@@ -545,6 +590,12 @@ def max_aggr(msgs: Array, adj_mat: Array) -> Array:
     """Max aggregation function."""
     maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
     return jnp.max(maxarg, axis=1)
+
+
+def min_aggr(msgs: Array, adj_mat: Array) -> Array:
+    """Min aggregation function."""
+    minarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, BIG_NUMBER)
+    return jnp.min(minarg, axis=1)
 
 
 def mean_aggr(msgs: Array, adj_mat: Array) -> Array:
@@ -570,6 +621,7 @@ class PGN(Processor):
         use_triplets: bool = False,
         nb_triplet_fts: int = 8,
         gated: bool = False,
+        differential_messages: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -593,8 +645,11 @@ class PGN(Processor):
         graph_fts_size = self.mid_size
         z_size = node_fts_size + hidden_size
 
+        message_module_constructor = (
+            DifferentialMessageModule if differential_messages else SingleMessageModule
+        )
         self.message_modules: List[MessageModule] = [
-            MessageModule(
+            message_module_constructor(
                 z_size=z_size,
                 edge_fts_size=edge_fts_size,
                 graph_fts_size=graph_fts_size,
@@ -663,6 +718,9 @@ class PGN(Processor):
             msgs = jnp.max(maxarg, axis=1)
         elif reduction == AggregationMode.SUM:
             msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        elif reduction == AggregationMode.MIN:
+            minarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, BIG_NUMBER)
+            msgs = jnp.min(minarg, axis=1)
         # else:
         #     msgs = self.reduction(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
         return msgs

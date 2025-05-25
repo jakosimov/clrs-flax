@@ -181,6 +181,7 @@ class MPNNConfig:
     dropout_prob: float = 0.0
     gated: bool = False
     use_triplets: bool = False
+    differential_messages: bool = False
 
 
 def make_mpnn_processor_factory(
@@ -189,6 +190,7 @@ def make_mpnn_processor_factory(
     use_triplets: bool = False,
     nb_triplet_fts: int = 32,
     gated: bool = True,
+    differential_messages: bool = False,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -200,6 +202,7 @@ def make_mpnn_processor_factory(
             gated=gated,
             rngs=rngs,
             reduction_modes=aggregation_modes,
+            differential_messages=differential_messages,
         )
 
     return _factory
@@ -212,6 +215,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         use_triplets=mpnn_config.use_triplets,
         nb_triplet_fts=mpnn_config.hidden_dim,
         gated=mpnn_config.gated,
+        differential_messages=mpnn_config.differential_messages,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -258,6 +262,7 @@ def _initialize_wandb(
         "dropout_prob": mpnn_config.dropout_prob,
         "use_triplets": mpnn_config.use_triplets,
         "gated": mpnn_config.gated,
+        "differential_messages": mpnn_config.differential_messages,
     }
     wandb.init(
         project=f"{dataset.algorithm_name}-mpnn",
