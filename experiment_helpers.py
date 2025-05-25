@@ -313,6 +313,9 @@ def evaluate_model(
     messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
     message_weights = model.net.processor.message_weights
+    message_weights = jax.nn.softmax(
+        message_weights[...]
+    )  # Ensure weights are normalized
     message_weights = [float(val) for val in message_weights]
     message_weights_dict = {
         f"message_weights_{i}": val for i, val in enumerate(message_weights)

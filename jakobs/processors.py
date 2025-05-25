@@ -584,6 +584,7 @@ def smooth_floor(x, k=10.0, n_min=None, n_max=None):
     Returns:
         A smooth approximation to floor(x).
     """
+
     # Determine the integer range around x to evaluate sigmoids
     # x_floor = jnp.floor(x)
     if n_min is None or n_max is None:
@@ -724,7 +725,7 @@ class PGN(Processor):
         if constant_aggregation_weight_init:
             # Initialize message weights to a constant value
             self.message_weights = nnx.Param(
-                jax.nn.initializers.constant(1.0)(
+                jax.nn.initializers.constant(0.0)(
                     rngs.params(), (len(self.reduction_modes),)
                 ),
                 name="message_weights",
