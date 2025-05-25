@@ -170,19 +170,20 @@ class DatasetConfig:
 @dataclass
 class MPNNConfig:
     aggregation_modes: list[AggregationMode] = [AggregationMode.MAX]
-    decoder_learning_rate: float = 1e-5
+    decoder_learning_rate: float = 1e-3
     backbone_learning_rate: float = 1e-3
-    encoder_learning_rate: float = 1e-3
+    encoder_learning_rate: float = 1e-1
+    message_weight_lr: float = 1e-3
     message_weight_decay: float = 0.0
-    max_steps: int = 1000
+    max_steps: int = 4000
     disable_jit: bool = False
     hint_teacher_forcing: float = 0.0
-    hidden_dim: int = 32
+    hidden_dim: int = 64
     dropout_prob: float = 0.0
     gated: bool = False
     use_triplets: bool = False
     differential_messages: bool = False
-    aggregation_weights_softmax: bool = False
+    aggregation_weights_softmax: bool = True
 
 
 def make_mpnn_processor_factory(
@@ -274,6 +275,7 @@ def _initialize_wandb(
         "gated": mpnn_config.gated,
         "differential_messages": mpnn_config.differential_messages,
         "aggregation_weights_softmax": mpnn_config.aggregation_weights_softmax,
+        "message_weight_lr": mpnn_config.message_weight_lr,
     }
     wandb.init(
         project=project_name,
@@ -436,6 +438,7 @@ def run_experiment(
             decoder_lr=mpnn_config.decoder_learning_rate,
             encoder_lr=mpnn_config.encoder_learning_rate,
             message_weight_decay=mpnn_config.message_weight_decay,
+            message_weight_lr=mpnn_config.message_weight_lr,
         )
 
         _initialize_wandb(

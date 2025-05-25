@@ -313,10 +313,11 @@ class BaselineOptimizer:
     def __init__(
         self,
         model,
-        backbone_lr: float = 1e-2,
-        decoder_lr: float = 1e-5,
-        encoder_lr: float = 1e-2,
+        backbone_lr: float = 1e-3,
+        decoder_lr: float = 1e-3,
+        encoder_lr: float = 1e-1,
         message_weight_decay: float = 0.0,
+        message_weight_lr: float = 1e-3,
     ):
         self.model = model
         graph_def, params_state = nnx.split(model)
@@ -328,7 +329,7 @@ class BaselineOptimizer:
             DECODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=decoder_lr),
             ENCODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=encoder_lr),
             MESSAGE_LABEL: self._mk_grad_clip_optimizer(
-                learning_rate=backbone_lr, weight_decay=message_weight_decay
+                learning_rate=message_weight_lr, weight_decay=message_weight_decay
             ),
         }
 
