@@ -718,6 +718,10 @@ class PGN(Processor):
             )
             for _ in range(len(self.reduction_modes))
         ]
+        self.message_weights = nnx.Param(
+            jax.random.normal(rngs.params(), (len(self.reduction_modes),)),
+            name="message_weights",
+        )
 
         if self.use_triplets:
             self.triplet_module = TripletMessageModule(
@@ -794,7 +798,10 @@ class PGN(Processor):
             ],
             axis=0,
         )
-        msgs_aggregated = jnp.mean(msgs_stacked, axis=0)  # (B, N, H)
+        # Multiply each message by its corresponding weight
+        weighted_msgs = msgs_stacked * self.message_weights[:, None, None, None]
+        # print(f"Message weights: {self.message_weights}")  # Debugging line
+        msgs_aggregated = jnp.sum(weighted_msgs, axis=0)  # (B, N, H)
         return msgs_aggregated
 
     def update(self, z: Array, msgs: Array):
