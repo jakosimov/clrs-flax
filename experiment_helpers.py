@@ -182,6 +182,7 @@ class MPNNConfig:
     gated: bool = False
     use_triplets: bool = False
     differential_messages: bool = False
+    aggregation_weights_softmax: bool = False
 
 
 def make_mpnn_processor_factory(
@@ -191,6 +192,7 @@ def make_mpnn_processor_factory(
     nb_triplet_fts: int = 32,
     gated: bool = True,
     differential_messages: bool = False,
+    aggregation_weights_softmax: bool = False,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -203,6 +205,7 @@ def make_mpnn_processor_factory(
             rngs=rngs,
             reduction_modes=aggregation_modes,
             differential_messages=differential_messages,
+            aggregation_weight_softmax=aggregation_weights_softmax,
         )
 
     return _factory
@@ -216,6 +219,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         nb_triplet_fts=mpnn_config.hidden_dim,
         gated=mpnn_config.gated,
         differential_messages=mpnn_config.differential_messages,
+        aggregation_weights_softmax=mpnn_config.aggregation_weights_softmax,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -269,6 +273,7 @@ def _initialize_wandb(
         "use_triplets": mpnn_config.use_triplets,
         "gated": mpnn_config.gated,
         "differential_messages": mpnn_config.differential_messages,
+        "aggregation_weights_softmax": mpnn_config.aggregation_weights_softmax,
     }
     wandb.init(
         project=project_name,
@@ -295,10 +300,10 @@ def evaluate_model(
 
     val_acc = out_val["score"]
     test_acc = out["score"]
-    decoder_magnitude = grad_magnitudes["decoders"]
-    encoder_magnitude = grad_magnitudes["encoders"]
-    processor_magnitude = grad_magnitudes["processor"]
-    messages_magnitude = grad_magnitudes["message_modules"]
+    decoder_magnitude = grad_magnitudes[baselines.DECODER_LABEL]
+    encoder_magnitude = grad_magnitudes[baselines.ENCODER_LABEL]
+    processor_magnitude = grad_magnitudes[baselines.PROCESSOR_LABEL]
+    messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
     message_weights = model.net.processor.message_weights
     message_weights = [float(val) for val in message_weights]

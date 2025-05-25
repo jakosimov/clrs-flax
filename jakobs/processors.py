@@ -680,6 +680,7 @@ class PGN(Processor):
         nb_triplet_fts: int = 8,
         gated: bool = False,
         differential_messages: bool = False,
+        aggregation_weight_softmax: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -696,6 +697,7 @@ class PGN(Processor):
         self.use_triplets = use_triplets
         self.nb_triplet_fts = nb_triplet_fts
         self.gated = gated
+        self.aggregation_weight_softmax = aggregation_weight_softmax
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -799,8 +801,14 @@ class PGN(Processor):
             axis=0,
         )
         # Multiply each message by its corresponding weight
-        weighted_msgs = msgs_stacked * self.message_weights[:, None, None, None]
-        # print(f"Message weights: {self.message_weights}")  # Debugging line
+        if self.aggregation_weight_softmax:
+            # Apply softmax to the weights
+            weights = jax.nn.softmax(self.message_weights[...])
+            # print(weights)
+        else:
+            # Use the weights as they are
+            weights = self.message_weights
+        weighted_msgs = msgs_stacked * weights[:, None, None, None]
         msgs_aggregated = jnp.sum(weighted_msgs, axis=0)  # (B, N, H)
         return msgs_aggregated
 

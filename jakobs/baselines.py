@@ -303,6 +303,12 @@ def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
     assert False
 
 
+DECODER_LABEL = "decoders"
+PROCESSOR_LABEL = "processor"
+ENCODER_LABEL = "encoders"
+MESSAGE_LABEL = "message_weights"
+
+
 class BaselineOptimizer:
     def __init__(
         self,
@@ -310,39 +316,37 @@ class BaselineOptimizer:
         backbone_lr: float = 1e-2,
         decoder_lr: float = 1e-5,
         encoder_lr: float = 1e-2,
-        message_weight_decay: float = 1e-4,
+        message_weight_decay: float = 0.0,
     ):
         self.model = model
         graph_def, params_state = nnx.split(model)
         self.graph_def = graph_def
         params = nnx.to_pure_dict(params_state)
 
-        DECODER = "decoders"
-        PROCESSOR = "processor"
-        ENCODER = "encoders"
-        MESSAGE = "message_modules"
-
         optimizers = {
-            PROCESSOR: self._mk_grad_clip_optimizer(learning_rate=backbone_lr),
-            DECODER: self._mk_grad_clip_optimizer(learning_rate=decoder_lr),
-            ENCODER: self._mk_grad_clip_optimizer(learning_rate=encoder_lr),
-            MESSAGE: self._mk_grad_clip_optimizer(
+            PROCESSOR_LABEL: self._mk_grad_clip_optimizer(learning_rate=backbone_lr),
+            DECODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=decoder_lr),
+            ENCODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=encoder_lr),
+            MESSAGE_LABEL: self._mk_grad_clip_optimizer(
                 learning_rate=backbone_lr, weight_decay=message_weight_decay
             ),
         }
 
         param_labels = traverse_util.path_aware_map(
             lambda path, _: (
-                DECODER
-                if DECODER in path
+                DECODER_LABEL
+                if DECODER_LABEL in path
                 else (
-                    ENCODER
-                    if ENCODER in path
-                    else MESSAGE if MESSAGE in path else PROCESSOR
+                    ENCODER_LABEL
+                    if ENCODER_LABEL in path
+                    else MESSAGE_LABEL if MESSAGE_LABEL in path else PROCESSOR_LABEL
                 )
             ),
             params,
         )
+
+        # for path, label in traverse_util.flatten_dict(param_labels).items():
+        #     print(path, "->", label)
 
         self.param_labels = {
             "/".join(map(str, path)): label
