@@ -184,6 +184,7 @@ class MPNNConfig:
     use_triplets: bool = False
     differential_messages: bool = False
     aggregation_weights_softmax: bool = True
+    constant_aggregation_weight_init: bool = False
 
 
 def make_mpnn_processor_factory(
@@ -194,6 +195,7 @@ def make_mpnn_processor_factory(
     gated: bool = True,
     differential_messages: bool = False,
     aggregation_weights_softmax: bool = False,
+    constant_aggregation_weight_init: bool = False,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -207,6 +209,7 @@ def make_mpnn_processor_factory(
             reduction_modes=aggregation_modes,
             differential_messages=differential_messages,
             aggregation_weight_softmax=aggregation_weights_softmax,
+            constant_aggregation_weight_init=constant_aggregation_weight_init,
         )
 
     return _factory
@@ -221,6 +224,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         gated=mpnn_config.gated,
         differential_messages=mpnn_config.differential_messages,
         aggregation_weights_softmax=mpnn_config.aggregation_weights_softmax,
+        constant_aggregation_weight_init=mpnn_config.constant_aggregation_weight_init,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -276,6 +280,7 @@ def _initialize_wandb(
         "differential_messages": mpnn_config.differential_messages,
         "aggregation_weights_softmax": mpnn_config.aggregation_weights_softmax,
         "message_weight_lr": mpnn_config.message_weight_lr,
+        "constant_aggregation_weight_init": mpnn_config.constant_aggregation_weight_init,
     }
     wandb.init(
         project=project_name,

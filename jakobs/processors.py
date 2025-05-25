@@ -681,6 +681,7 @@ class PGN(Processor):
         gated: bool = False,
         differential_messages: bool = False,
         aggregation_weight_softmax: bool = False,
+        constant_aggregation_weight_init: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -720,10 +721,19 @@ class PGN(Processor):
             )
             for _ in range(len(self.reduction_modes))
         ]
-        self.message_weights = nnx.Param(
-            jax.random.normal(rngs.params(), (len(self.reduction_modes),)),
-            name="message_weights",
-        )
+        if constant_aggregation_weight_init:
+            # Initialize message weights to a constant value
+            self.message_weights = nnx.Param(
+                jax.nn.initializers.constant(1.0)(
+                    rngs.params(), (len(self.reduction_modes),)
+                ),
+                name="message_weights",
+            )
+        else:
+            self.message_weights = nnx.Param(
+                jax.random.normal(rngs.params(), (len(self.reduction_modes),)),
+                name="message_weights",
+            )
 
         if self.use_triplets:
             self.triplet_module = TripletMessageModule(
