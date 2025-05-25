@@ -243,8 +243,8 @@ def _initialize_wandb(
     experiment_name=None,
     project_name=None,
 ):
-    if experiment_name is None:
-        experiment_name = f"{dataset.algorithm_name}-mpnn"
+    if project_name is None:
+        project_name = f"{dataset.algorithm_name}-mpnn"
     config = {
         "epochs": mpnn_config.max_steps,
         "train_batch_size": dataset.train_batch_size,
