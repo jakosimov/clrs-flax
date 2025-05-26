@@ -653,12 +653,20 @@ class ModSumAggregationFunction(AggregationFunction):
         k: float = 50.0,
         n_min: float = -300,
         n_max: float = 300,
+        n_is_learnable: bool = False,
+        rngs: nnx.Rngs | None = None,
     ):
         super().__init__()
-        self.n = n
         self.n_min = n_min
         self.n_max = n_max
         self.k = k
+        if n_is_learnable and rngs is not None:
+            self.n = nnx.Param(
+                jax.nn.initializers.constant(n)(rngs.params(), ()),
+                name="n",
+            )
+        else:
+            self.n = n
 
     def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
         msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
@@ -709,6 +717,7 @@ def make_aggregation_function(
     modulus_n: float,
     mod_steepness: float,
     softmax_temperature: float,
+    n_is_learnable: bool,
 ) -> AggregationFunction:
     """Factory function to create aggregation functions."""
     if mode == AggregationMode.SUM:
@@ -720,7 +729,9 @@ def make_aggregation_function(
     elif mode == AggregationMode.MEAN:
         return MeanAggregationFunction()
     elif mode == AggregationMode.MOD_SUM:
-        return ModSumAggregationFunction(n=modulus_n, k=mod_steepness)
+        return ModSumAggregationFunction(
+            n=modulus_n, k=mod_steepness, rngs=rngs, n_is_learnable=n_is_learnable
+        )
     elif mode == AggregationMode.ATTENTION:
         return AttentionAggregationFunction(
             z_size=z_size, rngs=rngs, softmax_temperature=softmax_temperature
@@ -753,6 +764,7 @@ class PGN(Processor):
         mod_steepness: float = 50.0,
         msg_weight_gumbel: bool = False,  # If True, use Gumbel softmax for message weights
         msg_weight_softmax_temperature: float = 1.0,  # Temperature for Gumbel softmax
+        n_is_learnable: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -816,6 +828,7 @@ class PGN(Processor):
                 modulus_n=modulus_n,
                 mod_steepness=mod_steepness,
                 softmax_temperature=softmax_temperature,
+                n_is_learnable=n_is_learnable,
             )
             for reduction_mode in self.reduction_modes
         ]

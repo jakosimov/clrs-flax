@@ -199,6 +199,7 @@ class MPNNConfig:
     turn_off_forcing_at: int | None = None  # If None, never turn off forcing
     msg_weight_gumbel: bool = False  # If True, use Gumbel softmax for message weights
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
+    n_is_learned: bool = False  # If True, learn the modulus n parameter
 
 
 def make_mpnn_processor_factory(
@@ -215,6 +216,7 @@ def make_mpnn_processor_factory(
     mod_steepness: float,
     msg_weight_gumbel: bool,
     msg_weight_softmax_temperature: float,
+    n_is_learned: bool,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -234,6 +236,7 @@ def make_mpnn_processor_factory(
             mod_steepness=mod_steepness,
             msg_weight_gumbel=msg_weight_gumbel,
             msg_weight_softmax_temperature=msg_weight_softmax_temperature,
+            n_is_learnable=n_is_learned,
         )
 
     return _factory
@@ -254,6 +257,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         mod_steepness=mpnn_config.mod_steepness,
         msg_weight_gumbel=mpnn_config.msg_weight_gumbel,
         msg_weight_softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
+        n_is_learned=mpnn_config.n_is_learned,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -318,6 +322,7 @@ def _initialize_wandb(
         "turn_off_forcing_at": mpnn_config.turn_off_forcing_at,
         "msg_weight_gumbel": mpnn_config.msg_weight_gumbel,
         "msg_weight_softmax_temperature": mpnn_config.msg_weight_softmax_temperature,
+        "n_is_learned": mpnn_config.n_is_learned,
     }
     wandb.init(
         project=project_name,
