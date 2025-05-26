@@ -751,6 +751,8 @@ class PGN(Processor):
         modulus_n: float = 2.0,
         softmax_temperature: float = 0.5,
         mod_steepness: float = 50.0,
+        msg_weight_gumbel: bool = False,  # If True, use Gumbel softmax for message weights
+        msg_weight_softmax_temperature: float = 1.0,  # Temperature for Gumbel softmax
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -768,6 +770,8 @@ class PGN(Processor):
         self.nb_triplet_fts = nb_triplet_fts
         self.gated = gated
         self.aggregation_weight_softmax = aggregation_weight_softmax
+        self.msg_weight_gumbel = msg_weight_gumbel
+        self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -883,13 +887,15 @@ class PGN(Processor):
             axis=0,
         )
         # Multiply each message by its corresponding weight
+        weights = self.message_weights[...]
         if self.aggregation_weight_softmax:
             # Apply softmax to the weights
-            weights = jax.nn.softmax(self.message_weights[...])
-            # print(weights)
-        else:
-            # Use the weights as they are
-            weights = self.message_weights
+            if rng_key is not None and self.msg_weight_gumbel:
+                weights += jax.random.gumbel(
+                    key=rng_key, shape=self.message_weights.shape
+                )
+            weights = jax.nn.softmax(weights / self.msg_weight_softmax_temperature)
+
         weighted_msgs = msgs_stacked * weights[:, None, None, None]
         msgs_aggregated = jnp.sum(weighted_msgs, axis=0)  # (B, N, H)
         return msgs_aggregated

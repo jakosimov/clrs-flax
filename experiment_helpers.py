@@ -197,6 +197,8 @@ class MPNNConfig:
     mod_steepness: float = 50.0
     nb_msg_passing_steps: int = 1
     turn_off_forcing_at: int | None = None  # If None, never turn off forcing
+    msg_weight_gumbel: bool = False  # If True, use Gumbel softmax for message weights
+    msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
 
 
 def make_mpnn_processor_factory(
@@ -209,8 +211,10 @@ def make_mpnn_processor_factory(
     aggregation_weights_softmax: bool,
     constant_aggregation_weight_init: bool,
     modulus_n: float,
-    softmax_temperature: float = 0.5,
-    mod_steepness: float = 50.0,
+    softmax_temperature: float,
+    mod_steepness: float,
+    msg_weight_gumbel: bool,
+    msg_weight_softmax_temperature: float,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -228,6 +232,8 @@ def make_mpnn_processor_factory(
             modulus_n=modulus_n,
             softmax_temperature=softmax_temperature,
             mod_steepness=mod_steepness,
+            msg_weight_gumbel=msg_weight_gumbel,
+            msg_weight_softmax_temperature=msg_weight_softmax_temperature,
         )
 
     return _factory
@@ -246,6 +252,8 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         modulus_n=mpnn_config.modulus_n,
         softmax_temperature=mpnn_config.softmax_temperature,
         mod_steepness=mpnn_config.mod_steepness,
+        msg_weight_gumbel=mpnn_config.msg_weight_gumbel,
+        msg_weight_softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -308,6 +316,8 @@ def _initialize_wandb(
         "mod_steepness": mpnn_config.mod_steepness,
         "nb_msg_passing_steps": mpnn_config.nb_msg_passing_steps,
         "turn_off_forcing_at": mpnn_config.turn_off_forcing_at,
+        "msg_weight_gumbel": mpnn_config.msg_weight_gumbel,
+        "msg_weight_softmax_temperature": mpnn_config.msg_weight_softmax_temperature,
     }
     wandb.init(
         project=project_name,
