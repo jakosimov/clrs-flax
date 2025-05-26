@@ -650,17 +650,21 @@ class ModSumAggregationFunction(AggregationFunction):
     def __init__(
         self,
         n: float = 2,
-        n_min: float = -100,
-        n_max: float = 100,
+        k: float = 50.0,
+        n_min: float = -300,
+        n_max: float = 300,
     ):
         super().__init__()
         self.n = n
         self.n_min = n_min
         self.n_max = n_max
+        self.k = k
 
     def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
         msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-        msgs = differentiable_mod(msgs, self.n, n_min=self.n_min, n_max=self.n_max)
+        msgs = differentiable_mod(
+            msgs, self.n, n_min=self.n_min, n_max=self.n_max, k=self.k
+        )
         return msgs
 
 
@@ -703,6 +707,8 @@ def make_aggregation_function(
     z_size: int,
     rngs: nnx.Rngs,
     modulus_n: float,
+    mod_steepness: float,
+    softmax_temperature: float,
 ) -> AggregationFunction:
     """Factory function to create aggregation functions."""
     if mode == AggregationMode.SUM:
@@ -714,10 +720,10 @@ def make_aggregation_function(
     elif mode == AggregationMode.MEAN:
         return MeanAggregationFunction()
     elif mode == AggregationMode.MOD_SUM:
-        return ModSumAggregationFunction(n=modulus_n)
+        return ModSumAggregationFunction(n=modulus_n, k=mod_steepness)
     elif mode == AggregationMode.ATTENTION:
         return AttentionAggregationFunction(
-            z_size=z_size, rngs=rngs, softmax_temperature=0.5
+            z_size=z_size, rngs=rngs, softmax_temperature=softmax_temperature
         )
     else:
         raise ValueError(f"Unknown aggregation mode: {mode}")
@@ -743,6 +749,8 @@ class PGN(Processor):
         aggregation_weight_softmax: bool = False,
         constant_aggregation_weight_init: bool = False,
         modulus_n: float = 2.0,
+        softmax_temperature: float = 0.5,
+        mod_steepness: float = 50.0,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -802,6 +810,8 @@ class PGN(Processor):
                 z_size=z_size,
                 rngs=rngs,
                 modulus_n=modulus_n,
+                mod_steepness=mod_steepness,
+                softmax_temperature=softmax_temperature,
             )
             for reduction_mode in self.reduction_modes
         ]

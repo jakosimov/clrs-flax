@@ -193,6 +193,10 @@ class MPNNConfig:
     gated: bool = False
     use_triplets: bool = False
     modulus_n: float = 2.0
+    softmax_temperature: float = 0.5
+    mod_steepness: float = 50.0
+    nb_msg_passing_steps: int = 1
+    turn_off_forcing_at: int | None = None  # If None, never turn off forcing
 
 
 def make_mpnn_processor_factory(
@@ -205,6 +209,8 @@ def make_mpnn_processor_factory(
     aggregation_weights_softmax: bool,
     constant_aggregation_weight_init: bool,
     modulus_n: float,
+    softmax_temperature: float = 0.5,
+    mod_steepness: float = 50.0,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -220,6 +226,8 @@ def make_mpnn_processor_factory(
             aggregation_weight_softmax=aggregation_weights_softmax,
             constant_aggregation_weight_init=constant_aggregation_weight_init,
             modulus_n=modulus_n,
+            softmax_temperature=softmax_temperature,
+            mod_steepness=mod_steepness,
         )
 
     return _factory
@@ -235,7 +243,9 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         differential_messages=mpnn_config.differential_messages,
         aggregation_weights_softmax=mpnn_config.aggregation_weights_softmax,
         constant_aggregation_weight_init=mpnn_config.constant_aggregation_weight_init,
-        modulus_n=mpnn_config.modulus_n,  # Used for triplet messages, if use_triplets is True
+        modulus_n=mpnn_config.modulus_n,
+        softmax_temperature=mpnn_config.softmax_temperature,
+        mod_steepness=mpnn_config.mod_steepness,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -252,6 +262,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         dropout_prob=mpnn_config.dropout_prob,
         hint_teacher_forcing=mpnn_config.hint_teacher_forcing,
         rngs=rngs,
+        nb_msg_passing_steps=mpnn_config.nb_msg_passing_steps,
     )
     return mpnn_model
 
@@ -293,6 +304,10 @@ def _initialize_wandb(
         "message_weight_lr": mpnn_config.message_weight_lr,
         "constant_aggregation_weight_init": mpnn_config.constant_aggregation_weight_init,
         "modulus_n": mpnn_config.modulus_n,
+        "softmax_temperature": mpnn_config.softmax_temperature,
+        "mod_steepness": mpnn_config.mod_steepness,
+        "nb_msg_passing_steps": mpnn_config.nb_msg_passing_steps,
+        "turn_off_forcing_at": mpnn_config.turn_off_forcing_at,
     }
     wandb.init(
         project=project_name,
@@ -408,6 +423,7 @@ def train_model(
     train_step=None,
     max_steps=1000,
     log_every=10,
+    turn_off_forcing_at=None,
 ):
     if train_step is None:
         train_step = optimizer.make_train_step()
@@ -436,6 +452,10 @@ def train_model(
             params = nnx.to_pure_dict(param_state)
             save_to_wandb(step, params, "params")
             save_to_wandb(step, optimizer.state, "optimizer_state")
+
+        if turn_off_forcing_at is not None and step == turn_off_forcing_at:
+            model.net._hint_teacher_forcing = 0.0
+            print(f"Turning off hint teacher forcing at step {step}")
 
         step += 1
 
@@ -476,5 +496,6 @@ def run_experiment(
             optimizer=optimizer,
             max_steps=mpnn_config.max_steps,
             log_every=log_every,
+            turn_off_forcing_at=mpnn_config.turn_off_forcing_at,
         )
         wandb.finish()
