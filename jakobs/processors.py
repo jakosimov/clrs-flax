@@ -388,35 +388,6 @@ class GATv2Full(GATv2):
         return super().__call__(node_fts, edge_fts, graph_fts, adj_mat, hidden)
 
 
-# def get_triplet_msgs(z, edge_fts, graph_fts, nb_triplet_fts):
-#     """Triplet messages, as done by Dudzik and Velickovic (2022)."""
-#     t_1 = hk.Linear(nb_triplet_fts)
-#     t_2 = hk.Linear(nb_triplet_fts)
-#     t_3 = hk.Linear(nb_triplet_fts)
-#     t_e_1 = hk.Linear(nb_triplet_fts)
-#     t_e_2 = hk.Linear(nb_triplet_fts)
-#     t_e_3 = hk.Linear(nb_triplet_fts)
-#     t_g = hk.Linear(nb_triplet_fts)
-
-#     tri_1 = t_1(z)
-#     tri_2 = t_2(z)
-#     tri_3 = t_3(z)
-#     tri_e_1 = t_e_1(edge_fts)
-#     tri_e_2 = t_e_2(edge_fts)
-#     tri_e_3 = t_e_3(edge_fts)
-#     tri_g = t_g(graph_fts)
-
-#     return (
-#         jnp.expand_dims(tri_1, axis=(2, 3))  #   (B, N, 1, 1, H)
-#         + jnp.expand_dims(tri_2, axis=(1, 3))  # + (B, 1, N, 1, H)
-#         + jnp.expand_dims(tri_3, axis=(1, 2))  # + (B, 1, 1, N, H)
-#         + jnp.expand_dims(tri_e_1, axis=3)  # + (B, N, N, 1, H)
-#         + jnp.expand_dims(tri_e_2, axis=2)  # + (B, N, 1, N, H)
-#         + jnp.expand_dims(tri_e_3, axis=1)  # + (B, 1, N, N, H)
-#         + jnp.expand_dims(tri_g, axis=(1, 2, 3))  # + (B, 1, 1, 1, H)
-#     )  # = (B, N, N, N, H)
-
-
 class TripletMessageModule(nnx.Module):
     """Triplet message module."""
 
@@ -503,25 +474,25 @@ class SingleMessageModule(MessageModule):
         self.mid_size = mid_size
         self.msg_mlp_sizes = msg_mlp_sizes
         self.mid_act = mid_act
-        self.m_1 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
-        self.m_2 = nnx.Linear(z_size, self.mid_size, rngs=rngs)
-        self.m_e = nnx.Linear(edge_fts_size, self.mid_size, rngs=rngs)
-        self.m_g = nnx.Linear(graph_fts_size, self.mid_size, rngs=rngs)
+        self.sender_message_f = nnx.Linear(z_size, self.mid_size, rngs=rngs)
+        self.receiver_msg_f = nnx.Linear(z_size, self.mid_size, rngs=rngs)
+        self.edge_msg_f = nnx.Linear(edge_fts_size, self.mid_size, rngs=rngs)
+        self.graph_msg_f = nnx.Linear(graph_fts_size, self.mid_size, rngs=rngs)
         if msg_mlp_sizes is not None:
             self.msg_mlp_transform = MLP(
                 in_size=self.mid_size, sizes=msg_mlp_sizes, rngs=rngs
             )
 
     def __call__(self, z: Array, edge_fts: Array, graph_fts: Array) -> Array:
-        msg_receiver = self.m_1(z)  # (B, N, H)
-        msg_sender = self.m_2(z)  # (B, N, H)
-        msg_e = self.m_e(edge_fts)  # (B, N, N, H)
-        msg_g = self.m_g(graph_fts)  # (B, N, H)
+        msg_receiver = self.sender_message_f(z)  # (B, N, H)
+        msg_sender = self.receiver_msg_f(z)  # (B, N, H)
+        msg_edge = self.edge_msg_f(edge_fts)  # (B, N, N, H)
+        msg_graph = self.graph_msg_f(graph_fts)  # (B, N, H)
         msgs = (
             jnp.expand_dims(msg_receiver, axis=1)  #   (B, 1, N, H)
             + jnp.expand_dims(msg_sender, axis=2)  # + (B, N, 1, H)
-            + msg_e  # + (B, N, N, H)
-            + jnp.expand_dims(msg_g, axis=(1, 2))  # + (B, 1, 1, H)
+            + msg_edge  # + (B, N, N, H)
+            + jnp.expand_dims(msg_graph, axis=(1, 2))  # + (B, 1, 1, H)
         )
 
         if self.msg_mlp_sizes is not None:
@@ -606,7 +577,7 @@ def smooth_floor(x, k=10.0, n_min=None, n_max=None):
     return jnp.sum(sigmoid_terms, axis=-1) + n_min - 1
 
 
-def differentiable_mod(x, n, k=50.0, n_min=None, n_max=None):
+def differentiable_mod(x, n: float, k=50.0, n_min=None, n_max=None):
     """
     Computes a differentiable version of the modulus operation.
 
@@ -630,38 +601,126 @@ class AggregationMode(StrEnum):
     SUM = "sum"
     MIN = "min"
     MOD_SUM = "mod_sum"
+    ATTENTION = "attention"
 
 
-def sum_aggr(msgs: Array, adj_mat: Array) -> Array:
+class AggregationFunction(nnx.Module):
+    """Base class for aggregation functions."""
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        """Aggregate messages."""
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
+
+class SumAggregationFunction(AggregationFunction):
     """Sum aggregation function."""
-    return jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        return jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
 
 
-def max_aggr(msgs: Array, adj_mat: Array) -> Array:
+class MaxAggregationFunction(AggregationFunction):
     """Max aggregation function."""
-    maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
-    return jnp.max(maxarg, axis=1)
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        maxarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, -BIG_NUMBER)
+        return jnp.max(maxarg, axis=1)
 
 
-def min_aggr(msgs: Array, adj_mat: Array) -> Array:
+class MinAggregationFunction(AggregationFunction):
     """Min aggregation function."""
-    minarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, BIG_NUMBER)
-    return jnp.min(minarg, axis=1)
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        minarg = jnp.where(jnp.expand_dims(adj_mat, -1), msgs, BIG_NUMBER)
+        return jnp.min(minarg, axis=1)
 
 
-def mean_aggr(msgs: Array, adj_mat: Array) -> Array:
+class MeanAggregationFunction(AggregationFunction):
     """Mean aggregation function."""
-    msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-    msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
-    return msgs
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        msgs = msgs / jnp.sum(adj_mat, axis=-1, keepdims=True)
+        return msgs
 
 
-def mod_sum_aggr(msgs: Array, adj_mat: Array, n: int) -> Array:
+class ModSumAggregationFunction(AggregationFunction):
     """Modulus sum aggregation function."""
-    msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
-    # n_nodes = adj_mat.shape[-1]
-    msgs = differentiable_mod(msgs, n, n_min=-100, n_max=100)
-    return msgs
+
+    def __init__(
+        self,
+        n: float = 2,
+        n_min: float = -100,
+        n_max: float = 100,
+    ):
+        super().__init__()
+        self.n = n
+        self.n_min = n_min
+        self.n_max = n_max
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        msgs = jnp.sum(msgs * jnp.expand_dims(adj_mat, -1), axis=1)
+        msgs = differentiable_mod(msgs, self.n, n_min=self.n_min, n_max=self.n_max)
+        return msgs
+
+
+class AttentionAggregationFunction(AggregationFunction):
+    """Attention aggregation function."""
+
+    def __init__(self, z_size: int, rngs: nnx.Rngs, softmax_temperature: float = 0.5):
+        super().__init__()
+        self.z_size = z_size
+        self.sender_repr_f = nnx.Linear(z_size, z_size, rngs=rngs)
+        self.receiver_repr_f = nnx.Linear(z_size, z_size, rngs=rngs)
+        self.attention_weights = nnx.Linear(z_size, 1, rngs=rngs)
+        self.softmax_temperature = softmax_temperature
+
+    def __call__(self, msgs: Array, adj_mat: Array, z: Array, rng_key=None) -> Array:
+        """Aggregate messages using attention weights."""
+        if rng_key is None:
+            rng_key = jax.random.PRNGKey(0)
+        sender_repr = self.sender_repr_f(z)  # (B, N, H)
+        receiver_repr = self.receiver_repr_f(z)  # (B, N, H)
+        # Compute attention scores
+        sender_repr = jnp.expand_dims(sender_repr, axis=1)  # (B, 1, N, H)
+        receiver_repr = jnp.expand_dims(receiver_repr, axis=2)  # (B, N, 1, H)
+        attention_scores = self.attention_weights(
+            sender_repr + receiver_repr
+        )  # (B, N, N, 1)
+        attention_scores = jnp.squeeze(attention_scores, axis=-1)
+        noise = jax.random.gumbel(rng_key, attention_scores.shape)
+        attention_scores += noise  # Add noise for stability
+        attention_scores /= self.softmax_temperature
+        attention_weights: Array = jax.nn.softmax(
+            attention_scores + (adj_mat - 1.0) * 1e9, axis=-1
+        )
+        msgs = msgs * jnp.expand_dims(attention_weights, -1)  # (B, N, N, H)
+        return jnp.sum(msgs, axis=1)  # (B, N, H)
+
+
+def make_aggregation_function(
+    mode: AggregationMode,
+    z_size: int,
+    rngs: nnx.Rngs,
+    modulus_n: float,
+) -> AggregationFunction:
+    """Factory function to create aggregation functions."""
+    if mode == AggregationMode.SUM:
+        return SumAggregationFunction()
+    elif mode == AggregationMode.MAX:
+        return MaxAggregationFunction()
+    elif mode == AggregationMode.MIN:
+        return MinAggregationFunction()
+    elif mode == AggregationMode.MEAN:
+        return MeanAggregationFunction()
+    elif mode == AggregationMode.MOD_SUM:
+        return ModSumAggregationFunction(n=modulus_n)
+    elif mode == AggregationMode.ATTENTION:
+        return AttentionAggregationFunction(
+            z_size=z_size, rngs=rngs, softmax_temperature=0.5
+        )
+    else:
+        raise ValueError(f"Unknown aggregation mode: {mode}")
 
 
 class PGN(Processor):
@@ -683,6 +742,7 @@ class PGN(Processor):
         differential_messages: bool = False,
         aggregation_weight_softmax: bool = False,
         constant_aggregation_weight_init: bool = False,
+        modulus_n: float = 2.0,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -736,6 +796,16 @@ class PGN(Processor):
                 name="message_weights",
             )
 
+        self.aggregation_modules: List[AggregationFunction] = [
+            make_aggregation_function(
+                mode=reduction_mode,
+                z_size=z_size,
+                rngs=rngs,
+                modulus_n=modulus_n,
+            )
+            for reduction_mode in self.reduction_modes
+        ]
+
         if self.use_triplets:
             self.triplet_module = TripletMessageModule(
                 nb_triplet_fts=nb_triplet_fts,
@@ -784,20 +854,9 @@ class PGN(Processor):
 
         return msgs  # [(B, N, N, H)]
 
-    def aggregate_one(self, msgs: Array, adj_mat: Array, reduction: AggregationMode):
-        if reduction == AggregationMode.MEAN:
-            msgs = sum_aggr(msgs, adj_mat)
-        elif reduction == AggregationMode.MAX:
-            msgs = max_aggr(msgs, adj_mat)
-        elif reduction == AggregationMode.SUM:
-            msgs = sum_aggr(msgs, adj_mat)
-        elif reduction == AggregationMode.MIN:
-            msgs = min_aggr(msgs, adj_mat)
-        elif reduction == AggregationMode.MOD_SUM:
-            msgs = mod_sum_aggr(msgs, adj_mat, n=2)
-        return msgs
-
-    def aggregate(self, msgs: list[Array], adj_mat: Array):
+    def aggregate(
+        self, msgs: list[Array], adj_mat: Array, z: Array, rng_key=None
+    ) -> Array:
         """Message aggregation function.
         msgs: Messages. (B, N, N, H)
         adj_mat: Graph adjacency matrix. (B, N, N)
@@ -806,8 +865,10 @@ class PGN(Processor):
         """
         msgs_stacked = jnp.stack(
             [
-                self.aggregate_one(msg, adj_mat, reduction)
-                for msg, reduction in zip(msgs, self.reduction_modes)
+                aggregation_module(
+                    msg, adj_mat, z=z, rng_key=rng_key
+                )  # adj_mat is used for aggregation
+                for msg, aggregation_module in zip(msgs, self.aggregation_modules)
             ],
             axis=0,
         )
@@ -838,6 +899,7 @@ class PGN(Processor):
         graph_fts: Array,
         adj_mat: Array,
         hidden: Array,
+        rng_key: Optional[Array] = None,
         **unused_kwargs,
     ) -> Tuple[Array, Optional[Array]]:
         """MPNN inference step.
@@ -871,7 +933,7 @@ class PGN(Processor):
         msgs = self.message(z, edge_fts, graph_fts)  # (B, N, N, H)
 
         # Message Aggregation
-        agg_msgs = self.aggregate(msgs, adj_mat)  # (B, N, H)
+        agg_msgs = self.aggregate(msgs, adj_mat, z=z, rng_key=rng_key)  # (B, N, H)
 
         # Updated node features
         ret = self.update(z, agg_msgs)  # (B, N, H)

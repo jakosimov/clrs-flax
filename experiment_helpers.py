@@ -169,33 +169,42 @@ class DatasetConfig:
 
 @dataclass
 class MPNNConfig:
-    aggregation_modes: list[AggregationMode] = [AggregationMode.MAX]
     decoder_learning_rate: float = 1e-3
     backbone_learning_rate: float = 1e-3
     encoder_learning_rate: float = 1e-1
-    message_weight_lr: float = 1e-3
+    message_weight_lr: float = 1e-1
     message_weight_decay: float = 0.0
-    max_steps: int = 4000
-    disable_jit: bool = False
-    hint_teacher_forcing: float = 0.0
-    hidden_dim: int = 64
     dropout_prob: float = 0.0
+    constant_aggregation_weight_init: bool = True
+    aggregation_weights_softmax: bool = True
+    disable_jit: bool = False
+    differential_messages: bool = False
+    # These are not yet settled parameters, but can be used to control the training process
+    aggregation_modes: list[AggregationMode] = [
+        AggregationMode.MAX,
+        AggregationMode.SUM,
+        AggregationMode.MOD_SUM,
+        AggregationMode.MEAN,
+        AggregationMode.MIN,
+    ]
+    max_steps: int = 4000
+    hidden_dim: int = 64
+    hint_teacher_forcing: float = 0.0
     gated: bool = False
     use_triplets: bool = False
-    differential_messages: bool = False
-    aggregation_weights_softmax: bool = True
-    constant_aggregation_weight_init: bool = False
+    modulus_n: float = 2.0
 
 
 def make_mpnn_processor_factory(
-    use_ln: bool = True,
-    aggregation_modes: list[AggregationMode] = [AggregationMode.MAX],
-    use_triplets: bool = False,
-    nb_triplet_fts: int = 32,
-    gated: bool = True,
-    differential_messages: bool = False,
-    aggregation_weights_softmax: bool = False,
-    constant_aggregation_weight_init: bool = False,
+    use_ln: bool,
+    aggregation_modes: list[AggregationMode],
+    use_triplets: bool,
+    nb_triplet_fts: int,
+    gated: bool,
+    differential_messages: bool,
+    aggregation_weights_softmax: bool,
+    constant_aggregation_weight_init: bool,
+    modulus_n: float,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -210,6 +219,7 @@ def make_mpnn_processor_factory(
             differential_messages=differential_messages,
             aggregation_weight_softmax=aggregation_weights_softmax,
             constant_aggregation_weight_init=constant_aggregation_weight_init,
+            modulus_n=modulus_n,
         )
 
     return _factory
@@ -225,6 +235,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         differential_messages=mpnn_config.differential_messages,
         aggregation_weights_softmax=mpnn_config.aggregation_weights_softmax,
         constant_aggregation_weight_init=mpnn_config.constant_aggregation_weight_init,
+        modulus_n=mpnn_config.modulus_n,  # Used for triplet messages, if use_triplets is True
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -281,6 +292,7 @@ def _initialize_wandb(
         "aggregation_weights_softmax": mpnn_config.aggregation_weights_softmax,
         "message_weight_lr": mpnn_config.message_weight_lr,
         "constant_aggregation_weight_init": mpnn_config.constant_aggregation_weight_init,
+        "modulus_n": mpnn_config.modulus_n,
     }
     wandb.init(
         project=project_name,

@@ -364,6 +364,7 @@ class NetFlax(nnx.Module):
             encs,
             decs,
             repred,
+            rng_key=rng_key,
         )
 
         if first_step:
@@ -406,6 +407,7 @@ class NetFlax(nnx.Module):
         encs: Dict[str, Encoder],
         decs: Dict[str, Decoder],
         repred: bool,
+        rng_key: _Key | None = None,
     ):
         """Generates one-step predictions."""
 
@@ -446,6 +448,7 @@ class NetFlax(nnx.Module):
                 nxt_hidden,
                 batch_size=batch_size,
                 nb_nodes=nb_nodes,
+                rng_key=rng_key,
             )
 
         if not repred and self._dropout_prob > 0.0:  # dropout only on training
