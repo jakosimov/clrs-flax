@@ -950,11 +950,11 @@ class PGN(Processor):
             jnp.mean(weights, axis=(0, 1, 2))
         )  # (R,)
 
-        def set_mean_message_weights(mean_message_weights: Array):
-            """Set the mean message weights."""
-            self.mean_message_weights = mean_message_weights.tolist()
+        # def set_mean_message_weights(mean_message_weights: Array):
+        #     """Set the mean message weights."""
+        #     self.mean_message_weights = mean_message_weights.tolist()
 
-        jax.debug.callback(set_mean_message_weights, mean_message_weights)
+        # jax.debug.callback(set_mean_message_weights, mean_message_weights)
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         # Aggregate messages across the reduction modes
         msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
