@@ -786,7 +786,7 @@ class PGN(Processor):
         self.msg_weight_gumbel = msg_weight_gumbel
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
         self.per_node_agg_weights = per_node_agg_weights
-        self.mean_message_weights = nnx.Param(
+        self.mean_message_weights = nnx.Variable(
             jnp.zeros((len(self.reduction_modes),), dtype=jnp.float32)
         )
 
@@ -935,7 +935,12 @@ class PGN(Processor):
         mean_message_weights = jax.lax.stop_gradient(
             jnp.mean(weights, axis=(0, 1, 2))
         )  # (R,)
-        self.mean_message_weights.replace(mean_message_weights)
+
+        def set_mean_message_weights(mean_message_weights: Array):
+            """Set the mean message weights."""
+            self.mean_message_weights.value = mean_message_weights
+
+        jax.debug.callback(set_mean_message_weights, mean_message_weights)
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         # Aggregate messages across the reduction modes
         msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
