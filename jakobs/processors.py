@@ -786,6 +786,9 @@ class PGN(Processor):
         self.msg_weight_gumbel = msg_weight_gumbel
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
         self.per_node_agg_weights = per_node_agg_weights
+        self.mean_message_weights = nnx.Param(
+            jnp.zeros((len(self.reduction_modes),), dtype=jnp.float32)
+        )
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -917,7 +920,6 @@ class PGN(Processor):
                     weights += jax.random.gumbel(key=rng_key, shape=weights.shape)
                 weights = jax.nn.softmax(weights / self.msg_weight_softmax_temperature)
             weights = weights[None, None, None, :]  # (1, 1, 1, R)
-            weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         else:
             # Per-node aggregation weights
             weights = self.message_weight_mlp(z)  # (B, N, R)
@@ -929,7 +931,12 @@ class PGN(Processor):
                     weights / self.msg_weight_softmax_temperature, axis=-1
                 )  # (B, N, R)
             weights = jnp.expand_dims(weights, axis=-2)  # (B, N, 1, R)
-            weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
+
+        mean_message_weights = jax.lax.stop_gradient(
+            jnp.mean(weights, axis=(0, 1, 2))
+        )  # (R,)
+        self.mean_message_weights.replace(mean_message_weights)
+        weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         # Aggregate messages across the reduction modes
         msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
         return msgs_aggregated

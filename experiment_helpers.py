@@ -353,6 +353,9 @@ def _initialize_wandb(
     )
 
 
+import jax.numpy as jnp
+
+
 # Initialize a new W&B run at the start of the notebook
 def evaluate_model(
     model,
@@ -381,17 +384,14 @@ def evaluate_model(
     else:
         messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
-    if per_node_agg_weights:
-        message_weights_dict = {}
-    else:
-        message_weights = model.net.processor.message_weights
-        message_weights = jax.nn.softmax(
-            message_weights[...] / softmax_temperature
-        )  # Ensure weights are normalized
-        message_weights = [float(val) for val in message_weights]
-        message_weights_dict = {
-            f"message_weights_{i}": val for i, val in enumerate(message_weights)
-        }
+    message_weights = jnp.array(model.net.processor.mean_message_weights)
+    message_weights = jax.nn.softmax(
+        message_weights[...] / softmax_temperature
+    )  # Ensure weights are normalized
+    message_weights = [float(val) for val in message_weights]
+    message_weights_dict = {
+        f"message_weights_{i}": val for i, val in enumerate(message_weights)
+    }
 
     if log_to_wandb:
         wandb.log(
