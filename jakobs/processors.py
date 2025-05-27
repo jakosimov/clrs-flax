@@ -740,6 +740,22 @@ def make_aggregation_function(
         raise ValueError(f"Unknown aggregation mode: {mode}")
 
 
+class MessageWeightMLP(nnx.Module):
+    """MLP for computing message weights."""
+
+    def __init__(self, in_size: int, out_size: int, rngs: nnx.Rngs):
+        super().__init__()
+        self.layer1 = nnx.Linear(in_size, out_size, rngs=rngs)
+        # self.layer2 = nnx.Linear(
+        #     out_size, out_size, rngs=rngs, bias_init=jax.nn.initializers.constant(50.0)
+        # )
+        self.layer2 = nnx.Linear(out_size, out_size, rngs=rngs)
+
+    def __call__(self, z: Array) -> Array:
+        """Compute message weights."""
+        return self.layer2(jax.nn.relu(self.layer1(z)))  # Apply MLP to compute weights
+
+
 class PGN(Processor):
     """Pointer Graph Networks (Veličković et al., NeurIPS 2020)."""
 
@@ -786,9 +802,7 @@ class PGN(Processor):
         self.msg_weight_gumbel = msg_weight_gumbel
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
         self.per_node_agg_weights = per_node_agg_weights
-        self.mean_message_weights = nnx.Variable(
-            jnp.zeros((len(self.reduction_modes),), dtype=jnp.float32)
-        )
+        self.mean_message_weights = [0 for _ in self.reduction_modes]
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -827,9 +841,9 @@ class PGN(Processor):
                     name="message_weights",
                 )
         else:
-            self.message_weight_mlp = MLP(
+            self.message_weight_mlp = MessageWeightMLP(
                 in_size=z_size,
-                sizes=[len(self.reduction_modes)],
+                out_size=len(self.reduction_modes),
                 rngs=rngs,
             )
 
@@ -938,7 +952,7 @@ class PGN(Processor):
 
         def set_mean_message_weights(mean_message_weights: Array):
             """Set the mean message weights."""
-            self.mean_message_weights.value = mean_message_weights
+            self.mean_message_weights = mean_message_weights.tolist()
 
         jax.debug.callback(set_mean_message_weights, mean_message_weights)
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)

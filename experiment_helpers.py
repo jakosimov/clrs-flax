@@ -384,7 +384,7 @@ def evaluate_model(
     else:
         messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
-    message_weights = jnp.array(model.net.processor.mean_message_weights)
+    message_weights = model.net.processor.mean_message_weights
     message_weights = [float(val) for val in message_weights]
     message_weights_dict = {
         f"message_weights_{i}": val for i, val in enumerate(message_weights)
