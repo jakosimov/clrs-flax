@@ -337,6 +337,7 @@ class BaselineOptimizer:
         encoder_lr: float = 1e-1,
         message_weight_decay: float = 0.0,
         message_weight_lr: float = 1e-3,
+        grad_clip_max_norm: float = 0.0,
     ):
         self.model = model
         graph_def = model.get_graph_def()
@@ -345,11 +346,19 @@ class BaselineOptimizer:
         self.fixed_state = model.get_fixed_state()
 
         optimizers = {
-            PROCESSOR_LABEL: self._mk_grad_clip_optimizer(learning_rate=backbone_lr),
-            DECODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=decoder_lr),
-            ENCODER_LABEL: self._mk_grad_clip_optimizer(learning_rate=encoder_lr),
+            PROCESSOR_LABEL: self._mk_grad_clip_optimizer(
+                learning_rate=backbone_lr, grad_clip_max_norm=grad_clip_max_norm
+            ),
+            DECODER_LABEL: self._mk_grad_clip_optimizer(
+                learning_rate=decoder_lr, grad_clip_max_norm=grad_clip_max_norm
+            ),
+            ENCODER_LABEL: self._mk_grad_clip_optimizer(
+                learning_rate=encoder_lr, grad_clip_max_norm=grad_clip_max_norm
+            ),
             MESSAGE_LABEL: self._mk_grad_clip_optimizer(
-                learning_rate=message_weight_lr, weight_decay=message_weight_decay
+                learning_rate=message_weight_lr,
+                weight_decay=message_weight_decay,
+                grad_clip_max_norm=grad_clip_max_norm,
             ),
         }
 

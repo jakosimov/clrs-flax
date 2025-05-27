@@ -217,6 +217,7 @@ class MPNNConfig:
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
     n_is_learned: bool = False  # If True, learn the modulus n parameter
     per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
+    grad_clipping: float = 0.0
 
 
 def make_mpnn_processor_factory(
@@ -345,6 +346,7 @@ def _initialize_wandb(
         "n_is_learned": mpnn_config.n_is_learned,
         "per_node_agg_weights": mpnn_config.per_node_agg_weights,
         "keep_lengths_for_n_samples": dataset.keep_lengths_for_n_samples,
+        "grad_clipping": mpnn_config.grad_clipping,
     }
     wandb.init(
         project=project_name,
@@ -532,6 +534,7 @@ def run_experiment(
             encoder_lr=mpnn_config.encoder_learning_rate,
             message_weight_decay=mpnn_config.message_weight_decay,
             message_weight_lr=mpnn_config.message_weight_lr,
+            grad_clip_max_norm=mpnn_config.grad_clipping,
         )
 
         _initialize_wandb(
