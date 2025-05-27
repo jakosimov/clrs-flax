@@ -341,6 +341,7 @@ def evaluate_model(
     cur_loss,
     grad_magnitudes,
     log_to_wandb=True,
+    softmax_temperature=1.0,
 ):
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
     out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
@@ -356,7 +357,7 @@ def evaluate_model(
 
     message_weights = model.net.processor.message_weights
     message_weights = jax.nn.softmax(
-        message_weights[...]
+        message_weights[...] / softmax_temperature
     )  # Ensure weights are normalized
     message_weights = [float(val) for val in message_weights]
     message_weights_dict = {
@@ -439,6 +440,7 @@ def train_model(
     max_steps=1000,
     log_every=10,
     turn_off_forcing_at=None,
+    softmax_temperature=1.0,
 ):
     if train_step is None:
         train_step = optimizer.make_train_step()
@@ -460,7 +462,14 @@ def train_model(
         rng_key = new_rng_key
         if step % log_every == 0:
             evaluate_model(
-                model, feedback, test_feedback, step, rng_key, cur_loss, grad_magnitudes
+                model,
+                feedback,
+                test_feedback,
+                step,
+                rng_key,
+                cur_loss,
+                grad_magnitudes,
+                softmax_temperature=softmax_temperature,
             )
         if step % (log_every * 10) == 0:
             _, param_state = nnx.split(model)
@@ -512,5 +521,6 @@ def run_experiment(
             max_steps=mpnn_config.max_steps,
             log_every=log_every,
             turn_off_forcing_at=mpnn_config.turn_off_forcing_at,
+            softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
         )
         wandb.finish()
