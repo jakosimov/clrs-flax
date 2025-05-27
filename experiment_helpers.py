@@ -3,6 +3,7 @@ from typing import Any
 import jax
 
 from attr import dataclass
+import jax.core
 import clrs
 
 from jakobs import processors
@@ -202,6 +203,7 @@ class MPNNConfig:
         AggregationMode.MOD_SUM,
         AggregationMode.MEAN,
         AggregationMode.MIN,
+        AggregationMode.ATTENTION,
     ]
     max_steps: int = 4000
     hidden_dim: int = 64
@@ -217,7 +219,7 @@ class MPNNConfig:
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
     n_is_learned: bool = False  # If True, learn the modulus n parameter
     per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
-    grad_clipping: float = 0.0
+    grad_clipping: float = 1.0
 
 
 def make_mpnn_processor_factory(
@@ -371,6 +373,7 @@ def evaluate_model(
     softmax_temperature=1.0,
     per_node_agg_weights=False,
 ):
+    print("starting evaluation")
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
     out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
     predictions, _ = model.predict(rng_key, test_feedback.features)
@@ -387,8 +390,13 @@ def evaluate_model(
         messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
     intermediates = nnx.pop(model.net.processor, nnx.Intermediate)
-    message_weights = intermediates["mean_message_weights"].value
-    message_weights = [float(val) for val in message_weights]
+    message_weights_tuple = intermediates["mean_message_weights"].value
+    for elem in reversed(message_weights_tuple):
+        if not isinstance(elem, jax.core.Tracer):
+            print(elem)
+            message_weights = elem
+            break
+    message_weights = [float(value) for value in message_weights]
     message_weights_dict = {
         f"message_weights_{i}": val for i, val in enumerate(message_weights)
     }
@@ -415,7 +423,6 @@ def evaluate_model(
             },
             step=step,
         )
-
     print(
         f"step = {step} | loss = {cur_loss} | val_acc = {out_val['score']} | test_acc = {out['score']}"
     )
@@ -502,11 +509,11 @@ def train_model(
                 softmax_temperature=softmax_temperature,
                 per_node_agg_weights=per_node_agg_weights,
             )
-        if step % (log_every * 10) == 0:
-            _, param_state = nnx.split(model)
-            params = nnx.to_pure_dict(param_state)
-            save_to_wandb(step, params, "params")
-            save_to_wandb(step, optimizer.state, "optimizer_state")
+        # if step % (log_every * 10) == 0:
+        #     _, param_state = nnx.split(model)
+        #     params = nnx.to_pure_dict(param_state)
+        #     save_to_wandb(step, params, "params")
+        #     save_to_wandb(step, optimizer.state, "optimizer_state")
 
         if turn_off_forcing_at is not None and step == turn_off_forcing_at:
             model.net._hint_teacher_forcing = 0.0

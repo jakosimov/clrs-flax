@@ -829,8 +829,6 @@ class PGN(Processor):
             nnx.Intermediate,
             "mean_message_weights",
             jnp.zeros(len(self.reduction_modes)),
-            reduce_fn=(lambda prev, curr: curr),
-            init_fn=lambda: jnp.zeros(len(self.reduction_modes)),
         )
 
         if not per_node_agg_weights:
@@ -960,13 +958,11 @@ class PGN(Processor):
 
         mean_message_weights = jnp.mean(weights, axis=(0, 1, 2))
         # (R,)
-        if not repred:
+        if repred:
             self.sow(
                 nnx.Intermediate,
                 "mean_message_weights",
                 mean_message_weights,
-                reduce_fn=(lambda prev, curr: curr),
-                init_fn=(lambda: jnp.zeros_like(mean_message_weights)),
             )
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         # Aggregate messages across the reduction modes
