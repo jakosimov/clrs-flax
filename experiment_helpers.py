@@ -21,11 +21,16 @@ def _iterate_sampler(sampler, batch_size):
         yield sampler.next(batch_size)
 
 
-def _iterate_samplers(samplers: list[Any], batch_size):
+def _iterate_samplers(
+    samplers: list[Any], batch_size, keep_lengths_for_n_samples: int | None = None
+):
     sampler_index = 0
     count = 0
     while True:
-        if count % 10 == 0:
+        if (
+            keep_lengths_for_n_samples is None
+            or count % keep_lengths_for_n_samples == 0
+        ):
             sampler_index = np.random.randint(0, len(samplers))
         sampler = samplers[sampler_index]
         yield sampler.next(batch_size)
@@ -87,6 +92,7 @@ class DatasetConfig:
         num_test_samples,
         test_batch_size=None,
         min_test_length=4,
+        keep_lengths_for_n_samples: int | None = None,
     ):
         self.algorithm_name = algorithm_name
         self.num_samples = num_samples
@@ -101,6 +107,7 @@ class DatasetConfig:
         self.test_sampler = None
         self.spec = None
         self.min_train_length = min_test_length
+        self.keep_lengths_for_n_samples: int | None = keep_lengths_for_n_samples
 
     def generate_train_samplers(self):
         if len(self.train_samplers) > 0:
@@ -150,7 +157,11 @@ class DatasetConfig:
 
     def get_train_sampler(self):
         self.generate_train_samplers()
-        return _iterate_samplers(self.train_samplers, batch_size=self.train_batch_size)
+        return _iterate_samplers(
+            self.train_samplers,
+            batch_size=self.train_batch_size,
+            keep_lengths_for_n_samples=self.keep_lengths_for_n_samples,
+        )
 
     def get_test_sampler(self):
         self.generate_test_sampler()
@@ -331,6 +342,7 @@ def _initialize_wandb(
         "msg_weight_softmax_temperature": mpnn_config.msg_weight_softmax_temperature,
         "n_is_learned": mpnn_config.n_is_learned,
         "per_node_agg_weights": mpnn_config.per_node_agg_weights,
+        "keep_lengths_for_n_samples": dataset.keep_lengths_for_n_samples,
     }
     wandb.init(
         project=project_name,
