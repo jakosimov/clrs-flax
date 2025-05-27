@@ -960,7 +960,7 @@ class PGN(Processor):
 
         mean_message_weights = jnp.mean(weights, axis=(0, 1, 2))
         # (R,)
-        if repred:
+        if not repred:
             self.sow(
                 nnx.Intermediate,
                 "mean_message_weights",
