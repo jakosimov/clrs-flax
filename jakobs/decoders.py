@@ -183,7 +183,9 @@ class GraphFeatureDecoder(Decoder):
         self.linear_2 = nnx.Linear(graph_fts_dim, output_dim2, rngs=rngs)
 
     def __call__(self, gr_emb: jax.Array, graph_fts: jax.Array) -> tuple[Array, Array]:
-        return self.linear_1(gr_emb), self.linear_2(graph_fts)
+        emb_value = self.linear_1(gr_emb)
+        fts_value = self.linear_2(graph_fts)
+        return emb_value, fts_value
 
 
 class GraphPointerDecoder(Decoder):
@@ -220,7 +222,7 @@ def construct_decoders_flax(
     h_t_dim = 3 * hidden_dim
     if edge_fts_dim is None:
         edge_fts_dim = hidden_dim
-    gr_emb_dim = hidden_dim
+    gr_emb_dim = 3 * hidden_dim
     graph_fts_dim = hidden_dim
     # linear = lambda out_dims: nnx.Linear(hidden_dim, out_dims, rngs=rngs)
     if loc == _Location.NODE:

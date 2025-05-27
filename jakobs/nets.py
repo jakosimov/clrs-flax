@@ -150,6 +150,7 @@ class NetFlax(nnx.Module):
                             hidden_dim=self.hidden_dim,
                             init=self.encoder_init,
                             name=f"algo_{algo_idx}_{name}",
+                            nb_dims=self.nb_dims[algo_idx][name],
                             rngs=rngs,
                         )
 

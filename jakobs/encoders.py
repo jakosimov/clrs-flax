@@ -65,9 +65,9 @@ class OneWayEncoder(Encoder):
     functions such as sigmoid or tanh.
     """
 
-    def __init__(self, output_dim: int, rngs: nnx.Rngs):
+    def __init__(self, output_dim: int, rngs: nnx.Rngs, input_dim=1):
         super().__init__(output_dim, rngs)
-        self.linear = nnx.Linear(1, output_dim, rngs=rngs)
+        self.linear = nnx.Linear(input_dim, output_dim, rngs=rngs)
 
     def __call__(self, x: Array) -> Array:
         return self.linear(x)
@@ -102,6 +102,7 @@ def construct_encoders_flax(
     init: EncoderInitialiser,
     name: str,
     rngs: nnx.Rngs,
+    nb_dims: int,
 ) -> Encoder:
     """Constructs encoders."""
     if (
@@ -117,6 +118,8 @@ def construct_encoders_flax(
     # idk what the input dimension is here
     if loc == _Location.EDGE and t == _Type.POINTER:
         return TwoWayEncoder(hidden_dim, rngs)
+    elif t == _Type.CATEGORICAL:
+        return OneWayEncoder(input_dim=nb_dims, output_dim=hidden_dim, rngs=rngs)
     else:
         return OneWayEncoder(hidden_dim, rngs)
     # encoders = [linear(hidden_dim)]
