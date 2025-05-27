@@ -758,7 +758,7 @@ class PGN(Processor):
         gated: bool = False,
         differential_messages: bool = False,
         aggregation_weight_softmax: bool = False,
-        constant_aggregation_weight_init: bool = False,
+        constant_aggregation_weight_init: float | None = None,
         modulus_n: float = 2.0,
         softmax_temperature: float = 0.5,
         mod_steepness: float = 50.0,
@@ -810,10 +810,10 @@ class PGN(Processor):
         ]
 
         if not per_node_agg_weights:
-            if constant_aggregation_weight_init:
+            if constant_aggregation_weight_init is not None:
                 # Initialize message weights to a constant value
                 self.message_weights = nnx.Param(
-                    jax.nn.initializers.constant(0.0)(
+                    jax.nn.initializers.constant(constant_aggregation_weight_init)(
                         rngs.params(), (len(self.reduction_modes),)
                     ),
                     name="message_weights",

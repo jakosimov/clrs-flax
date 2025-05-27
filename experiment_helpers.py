@@ -189,7 +189,9 @@ class MPNNConfig:
     message_weight_lr: float = 1e-1
     message_weight_decay: float = 0.0
     dropout_prob: float = 0.0
-    constant_aggregation_weight_init: bool = True
+    constant_aggregation_weight_init: float | None = (
+        0.0  # If None, use random initialization
+    )
     aggregation_weights_softmax: bool = True
     disable_jit: bool = False
     differential_messages: bool = False
@@ -225,7 +227,7 @@ def make_mpnn_processor_factory(
     gated: bool,
     differential_messages: bool,
     aggregation_weights_softmax: bool,
-    constant_aggregation_weight_init: bool,
+    constant_aggregation_weight_init: float | None,
     modulus_n: float,
     softmax_temperature: float,
     mod_steepness: float,
