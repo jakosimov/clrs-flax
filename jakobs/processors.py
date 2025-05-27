@@ -765,6 +765,7 @@ class PGN(Processor):
         msg_weight_gumbel: bool = False,  # If True, use Gumbel softmax for message weights
         msg_weight_softmax_temperature: float = 1.0,  # Temperature for Gumbel softmax
         n_is_learnable: bool = False,
+        per_node_agg_weights: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -784,6 +785,7 @@ class PGN(Processor):
         self.aggregation_weight_softmax = aggregation_weight_softmax
         self.msg_weight_gumbel = msg_weight_gumbel
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
+        self.per_node_agg_weights = per_node_agg_weights
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -806,18 +808,26 @@ class PGN(Processor):
             )
             for _ in range(len(self.reduction_modes))
         ]
-        if constant_aggregation_weight_init:
-            # Initialize message weights to a constant value
-            self.message_weights = nnx.Param(
-                jax.nn.initializers.constant(0.0)(
-                    rngs.params(), (len(self.reduction_modes),)
-                ),
-                name="message_weights",
-            )
+
+        if not per_node_agg_weights:
+            if constant_aggregation_weight_init:
+                # Initialize message weights to a constant value
+                self.message_weights = nnx.Param(
+                    jax.nn.initializers.constant(0.0)(
+                        rngs.params(), (len(self.reduction_modes),)
+                    ),
+                    name="message_weights",
+                )
+            else:
+                self.message_weights = nnx.Param(
+                    jax.random.normal(rngs.params(), (len(self.reduction_modes),)),
+                    name="message_weights",
+                )
         else:
-            self.message_weights = nnx.Param(
-                jax.random.normal(rngs.params(), (len(self.reduction_modes),)),
-                name="message_weights",
+            self.message_weight_mlp = MLP(
+                in_size=z_size,
+                sizes=[len(self.reduction_modes)],
+                rngs=rngs,
             )
 
         self.aggregation_modules: List[AggregationFunction] = [
@@ -892,25 +902,36 @@ class PGN(Processor):
         """
         msgs_stacked = jnp.stack(
             [
-                aggregation_module(
-                    msg, adj_mat, z=z, rng_key=rng_key
-                )  # adj_mat is used for aggregation
+                aggregation_module(msg, adj_mat, z=z, rng_key=rng_key)  # (B, N, H)
                 for msg, aggregation_module in zip(msgs, self.aggregation_modules)
             ],
-            axis=0,
-        )
+            axis=3,
+        )  # (B, N, H, R)
         # Multiply each message by its corresponding weight
-        weights = self.message_weights[...]
-        if self.aggregation_weight_softmax:
-            # Apply softmax to the weights
-            if rng_key is not None and self.msg_weight_gumbel:
-                weights += jax.random.gumbel(
-                    key=rng_key, shape=self.message_weights.shape
-                )
-            weights = jax.nn.softmax(weights / self.msg_weight_softmax_temperature)
 
-        weighted_msgs = msgs_stacked * weights[:, None, None, None]
-        msgs_aggregated = jnp.sum(weighted_msgs, axis=0)  # (B, N, H)
+        if not self.per_node_agg_weights:
+            weights = self.message_weights[...]  # (R,)
+            if self.aggregation_weight_softmax:
+                # Apply softmax to the weights
+                if rng_key is not None and self.msg_weight_gumbel:
+                    weights += jax.random.gumbel(key=rng_key, shape=weights.shape)
+                weights = jax.nn.softmax(weights / self.msg_weight_softmax_temperature)
+            weights = weights[None, None, None, :]  # (1, 1, 1, R)
+            weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
+        else:
+            # Per-node aggregation weights
+            weights = self.message_weight_mlp(z)  # (B, N, R)
+            if self.aggregation_weight_softmax:
+                # Apply softmax to the weights
+                if rng_key is not None and self.msg_weight_gumbel:
+                    weights += jax.random.gumbel(key=rng_key, shape=weights.shape)
+                weights = jax.nn.softmax(
+                    weights / self.msg_weight_softmax_temperature, axis=-1
+                )  # (B, N, R)
+            weights = jnp.expand_dims(weights, axis=-2)  # (B, N, 1, R)
+            weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
+        # Aggregate messages across the reduction modes
+        msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
         return msgs_aggregated
 
     def update(self, z: Array, msgs: Array):

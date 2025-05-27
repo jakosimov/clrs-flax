@@ -203,6 +203,7 @@ class MPNNConfig:
     msg_weight_gumbel: bool = False  # If True, use Gumbel softmax for message weights
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
     n_is_learned: bool = False  # If True, learn the modulus n parameter
+    per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
 
 
 def make_mpnn_processor_factory(
@@ -220,6 +221,7 @@ def make_mpnn_processor_factory(
     msg_weight_gumbel: bool,
     msg_weight_softmax_temperature: float,
     n_is_learned: bool,
+    per_node_agg_weights: bool,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -240,6 +242,7 @@ def make_mpnn_processor_factory(
             msg_weight_gumbel=msg_weight_gumbel,
             msg_weight_softmax_temperature=msg_weight_softmax_temperature,
             n_is_learnable=n_is_learned,
+            per_node_agg_weights=per_node_agg_weights,
         )
 
     return _factory
@@ -261,6 +264,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         msg_weight_gumbel=mpnn_config.msg_weight_gumbel,
         msg_weight_softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
         n_is_learned=mpnn_config.n_is_learned,
+        per_node_agg_weights=mpnn_config.per_node_agg_weights,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -326,6 +330,7 @@ def _initialize_wandb(
         "msg_weight_gumbel": mpnn_config.msg_weight_gumbel,
         "msg_weight_softmax_temperature": mpnn_config.msg_weight_softmax_temperature,
         "n_is_learned": mpnn_config.n_is_learned,
+        "per_node_agg_weights": mpnn_config.per_node_agg_weights,
     }
     wandb.init(
         project=project_name,
@@ -345,6 +350,7 @@ def evaluate_model(
     grad_magnitudes,
     log_to_wandb=True,
     softmax_temperature=1.0,
+    per_node_agg_weights=False,
 ):
     predictions_val, _ = model.predict(rng_key, val_feedback.features)
     out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
@@ -356,16 +362,22 @@ def evaluate_model(
     decoder_magnitude = grad_magnitudes[baselines.DECODER_LABEL]
     encoder_magnitude = grad_magnitudes[baselines.ENCODER_LABEL]
     processor_magnitude = grad_magnitudes[baselines.PROCESSOR_LABEL]
-    messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
+    if per_node_agg_weights:
+        messages_magnitude = 0
+    else:
+        messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
-    message_weights = model.net.processor.message_weights
-    message_weights = jax.nn.softmax(
-        message_weights[...] / softmax_temperature
-    )  # Ensure weights are normalized
-    message_weights = [float(val) for val in message_weights]
-    message_weights_dict = {
-        f"message_weights_{i}": val for i, val in enumerate(message_weights)
-    }
+    if per_node_agg_weights:
+        message_weights_dict = {}
+    else:
+        message_weights = model.net.processor.message_weights
+        message_weights = jax.nn.softmax(
+            message_weights[...] / softmax_temperature
+        )  # Ensure weights are normalized
+        message_weights = [float(val) for val in message_weights]
+        message_weights_dict = {
+            f"message_weights_{i}": val for i, val in enumerate(message_weights)
+        }
 
     if log_to_wandb:
         wandb.log(
@@ -444,6 +456,7 @@ def train_model(
     log_every=10,
     turn_off_forcing_at=None,
     softmax_temperature=1.0,
+    per_node_agg_weights=False,
 ):
     if train_step is None:
         train_step = optimizer.make_train_step()
@@ -473,6 +486,7 @@ def train_model(
                 cur_loss,
                 grad_magnitudes,
                 softmax_temperature=softmax_temperature,
+                per_node_agg_weights=per_node_agg_weights,
             )
         if step % (log_every * 10) == 0:
             _, param_state = nnx.split(model)
@@ -525,5 +539,6 @@ def run_experiment(
             log_every=log_every,
             turn_off_forcing_at=mpnn_config.turn_off_forcing_at,
             softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
+            per_node_agg_weights=mpnn_config.per_node_agg_weights,
         )
         wandb.finish()
