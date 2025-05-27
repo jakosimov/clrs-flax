@@ -802,7 +802,6 @@ class PGN(Processor):
         self.msg_weight_gumbel = msg_weight_gumbel
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
         self.per_node_agg_weights = per_node_agg_weights
-        self.mean_message_weights = [0 for _ in self.reduction_modes]
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -825,6 +824,14 @@ class PGN(Processor):
             )
             for _ in range(len(self.reduction_modes))
         ]
+
+        self.sow(
+            nnx.Intermediate,
+            "mean_message_weights",
+            jnp.zeros(len(self.reduction_modes)),
+            reduce_fn=(lambda prev, curr: curr),
+            init_fn=lambda: jnp.zeros(len(self.reduction_modes)),
+        )
 
         if not per_node_agg_weights:
             if constant_aggregation_weight_init is not None:
@@ -909,7 +916,12 @@ class PGN(Processor):
         return msgs  # [(B, N, N, H)]
 
     def aggregate(
-        self, msgs: list[Array], adj_mat: Array, z: Array, rng_key=None
+        self,
+        msgs: list[Array],
+        adj_mat: Array,
+        z: Array,
+        repred: bool,
+        rng_key=None,
     ) -> Array:
         """Message aggregation function.
         msgs: Messages. (B, N, N, H)
@@ -946,15 +958,16 @@ class PGN(Processor):
                 )  # (B, N, R)
             weights = jnp.expand_dims(weights, axis=-2)  # (B, N, 1, R)
 
-        mean_message_weights = jax.lax.stop_gradient(
-            jnp.mean(weights, axis=(0, 1, 2))
-        )  # (R,)
-
-        # def set_mean_message_weights(mean_message_weights: Array):
-        #     """Set the mean message weights."""
-        #     self.mean_message_weights = mean_message_weights.tolist()
-
-        # jax.debug.callback(set_mean_message_weights, mean_message_weights)
+        mean_message_weights = jnp.mean(weights, axis=(0, 1, 2))
+        # (R,)
+        if repred:
+            self.sow(
+                nnx.Intermediate,
+                "mean_message_weights",
+                mean_message_weights,
+                reduce_fn=(lambda prev, curr: curr),
+                init_fn=(lambda: jnp.zeros_like(mean_message_weights)),
+            )
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         # Aggregate messages across the reduction modes
         msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
@@ -975,6 +988,7 @@ class PGN(Processor):
         graph_fts: Array,
         adj_mat: Array,
         hidden: Array,
+        repred: bool,
         rng_key: Optional[Array] = None,
         **unused_kwargs,
     ) -> Tuple[Array, Optional[Array]]:
@@ -1009,7 +1023,9 @@ class PGN(Processor):
         msgs = self.message(z, edge_fts, graph_fts)  # (B, N, N, H)
 
         # Message Aggregation
-        agg_msgs = self.aggregate(msgs, adj_mat, z=z, rng_key=rng_key)  # (B, N, H)
+        agg_msgs = self.aggregate(
+            msgs=msgs, adj_mat=adj_mat, z=z, rng_key=rng_key, repred=repred
+        )  # (B, N, H)
 
         # Updated node features
         ret = self.update(z, agg_msgs)  # (B, N, H)
@@ -1041,11 +1057,19 @@ class DeepSets(PGN):
         graph_fts: Array,
         adj_mat: Array,
         hidden: Array,
+        repred: bool,
         **unused_kwargs,
     ) -> Tuple[Array, Optional[Array]]:
         assert adj_mat.ndim == 3
         adj_mat = jnp.ones_like(adj_mat) * jnp.eye(adj_mat.shape[-1])
-        return super().__call__(node_fts, edge_fts, graph_fts, adj_mat, hidden)
+        return super().__call__(
+            node_fts=node_fts,
+            edge_fts=edge_fts,
+            graph_fts=graph_fts,
+            adj_mat=adj_mat,
+            hidden=hidden,
+            repred=repred,
+        )
 
 
 class MPNN(PGN):
@@ -1058,10 +1082,18 @@ class MPNN(PGN):
         graph_fts: Array,
         adj_mat: Array,
         hidden: Array,
+        repred: bool,
         **unused_kwargs,
     ) -> Tuple[Array, Optional[Array]]:
         adj_mat = jnp.ones_like(adj_mat)
-        return super().__call__(node_fts, edge_fts, graph_fts, adj_mat, hidden)
+        return super().__call__(
+            node_fts=node_fts,
+            edge_fts=edge_fts,
+            graph_fts=graph_fts,
+            adj_mat=adj_mat,
+            hidden=hidden,
+            repred=repred,
+        )
 
 
 class PGNMask(PGN):

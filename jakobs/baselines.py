@@ -285,12 +285,31 @@ class BaselineModel(nnx.Module, model.Model):
             return outs, hint_preds
 
     def get_params(self):
-        _, params_state = nnx.split(self)
+        _, params_state, _ = self.split_model()
         params = nnx.to_pure_dict(params_state)
         return params
 
+    def split_model(self):
+        def filter_fn(v, x):
+            if "mean_message_weights" in v:
+                return False
+            return True
+
+        graphdef, params, fixed_state = nnx.split(
+            self, filter_fn, lambda v, x: not filter_fn(v, x)
+        )
+        return graphdef, params, fixed_state
+
     def update_model_params(self, params):
         nnx.update(self, params)
+
+    def get_graph_def(self):
+        graph_def, _, _ = self.split_model()
+        return graph_def
+
+    def get_fixed_state(self):
+        _, _, fixed_state = self.split_model()
+        return fixed_state
 
 
 def _nb_nodes(feedback: _Feedback, is_chunked) -> int:
@@ -312,7 +331,7 @@ MESSAGE_LABEL = "message_weights"
 class BaselineOptimizer:
     def __init__(
         self,
-        model,
+        model: BaselineModel,
         backbone_lr: float = 1e-3,
         decoder_lr: float = 1e-3,
         encoder_lr: float = 1e-1,
@@ -320,9 +339,10 @@ class BaselineOptimizer:
         message_weight_lr: float = 1e-3,
     ):
         self.model = model
-        graph_def, params_state = nnx.split(model)
+        graph_def = model.get_graph_def()
+        params = model.get_params()
         self.graph_def = graph_def
-        params = nnx.to_pure_dict(params_state)
+        self.fixed_state = model.get_fixed_state()
 
         optimizers = {
             PROCESSOR_LABEL: self._mk_grad_clip_optimizer(learning_rate=backbone_lr),
@@ -411,12 +431,20 @@ class BaselineOptimizer:
 
     def make_train_step(self):
         graphdef = self.graph_def
+        fixed_state = self.fixed_state
         tx = self.tx
         compute_grad_magnitudes = self._compute_grad_magnitudes
 
         def train_step_f(params, opt_state, feedback, rng_key):
             def loss_fn(params):
-                model = nnx.merge(graphdef, params)
+                try:
+                    model = nnx.merge(graphdef, params, fixed_state)
+                except:
+                    import jax.tree_util as tu
+
+                    print(tu.tree_structure(params))
+                    print(tu.tree_structure(graphdef))
+                # model = nnx.merge(graphdef, params)
                 loss = model.feedback(rng_key, feedback)
                 return loss
 

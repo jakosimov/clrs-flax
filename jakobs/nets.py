@@ -442,14 +442,15 @@ class NetFlax(nnx.Module):
         nxt_hidden = hidden
         for _ in range(self.nb_msg_passing_steps):
             nxt_hidden, nxt_edge = self.processor(
-                node_fts,
-                edge_fts,
-                graph_fts,
-                adj_mat,
-                nxt_hidden,
+                node_fts=node_fts,
+                edge_fts=edge_fts,
+                graph_fts=graph_fts,
+                adj_mat=adj_mat,
+                hidden=nxt_hidden,
                 batch_size=batch_size,
                 nb_nodes=nb_nodes,
                 rng_key=rng_key,
+                repred=repred,
             )
 
         if not repred and self._dropout_prob > 0.0:  # dropout only on training
