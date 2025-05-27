@@ -22,8 +22,11 @@ def _iterate_sampler(sampler, batch_size):
 
 
 def _iterate_samplers(samplers: list[Any], batch_size):
+    sampler_index = 0
+    count = 0
     while True:
-        sampler_index = np.random.randint(0, len(samplers))
+        if count % 10 == 0:
+            sampler_index = np.random.randint(0, len(samplers))
         sampler = samplers[sampler_index]
         yield sampler.next(batch_size)
 
