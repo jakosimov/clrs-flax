@@ -783,6 +783,7 @@ class PGN(Processor):
         n_is_learnable: bool = False,
         per_node_agg_weights: bool = False,
         point_wise_softmax: bool = False,
+        single_message: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -804,6 +805,7 @@ class PGN(Processor):
         self.msg_weight_softmax_temperature = msg_weight_softmax_temperature
         self.per_node_agg_weights = per_node_agg_weights
         self.point_wise_softmax = point_wise_softmax
+        self.single_message = single_message
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -814,8 +816,8 @@ class PGN(Processor):
         message_module_constructor = (
             DifferentialMessageModule if differential_messages else SingleMessageModule
         )
-        self.message_modules: List[MessageModule] = [
-            message_module_constructor(
+        if single_message:
+            self.message_module = message_module_constructor(
                 z_size=z_size,
                 edge_fts_size=edge_fts_size,
                 graph_fts_size=graph_fts_size,
@@ -824,8 +826,19 @@ class PGN(Processor):
                 msg_mlp_sizes=self._msgs_mlp_sizes,
                 mid_act=self.mid_act,
             )
-            for _ in range(len(self.reduction_modes))
-        ]
+        else:
+            self.message_modules: List[MessageModule] = [
+                message_module_constructor(
+                    z_size=z_size,
+                    edge_fts_size=edge_fts_size,
+                    graph_fts_size=graph_fts_size,
+                    mid_size=self.mid_size,
+                    rngs=rngs,
+                    msg_mlp_sizes=self._msgs_mlp_sizes,
+                    mid_act=self.mid_act,
+                )
+                for _ in range(len(self.reduction_modes))
+            ]
 
         self.sow(
             nnx.Intermediate,
@@ -913,10 +926,14 @@ class PGN(Processor):
         Returns:
             msgs: Messages. (B, N, N, H)
         """
-        msgs = [
-            message_module(z, edge_fts, graph_fts)
-            for message_module in self.message_modules
-        ]
+        if self.single_message:
+            msgs = self.message_module(z, edge_fts, graph_fts)
+            msgs = [msgs] * len(self.reduction_modes)  # Duplicate for each module
+        else:
+            msgs = [
+                message_module(z, edge_fts, graph_fts)
+                for message_module in self.message_modules
+            ]
 
         return msgs  # [(B, N, N, H)]
 

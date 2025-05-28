@@ -221,6 +221,7 @@ class MPNNConfig:
     per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
     grad_clipping: float = 1.0
     point_wise_softmax: bool = False  # If True, use point-wise softmax for messages
+    single_message: bool = False  # If True, use a single message per edge
 
 
 def make_mpnn_processor_factory(
@@ -240,6 +241,7 @@ def make_mpnn_processor_factory(
     n_is_learned: bool,
     per_node_agg_weights: bool,
     point_wise_softmax: bool,
+    single_message: bool,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -262,6 +264,7 @@ def make_mpnn_processor_factory(
             n_is_learnable=n_is_learned,
             per_node_agg_weights=per_node_agg_weights,
             point_wise_softmax=point_wise_softmax,
+            single_message=single_message,
         )
 
     return _factory
@@ -285,6 +288,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         n_is_learned=mpnn_config.n_is_learned,
         per_node_agg_weights=mpnn_config.per_node_agg_weights,
         point_wise_softmax=mpnn_config.point_wise_softmax,
+        single_message=mpnn_config.single_message,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -354,6 +358,7 @@ def _initialize_wandb(
         "keep_lengths_for_n_samples": dataset.keep_lengths_for_n_samples,
         "grad_clipping": mpnn_config.grad_clipping,
         "point_wise_softmax": mpnn_config.point_wise_softmax,
+        "single_message": mpnn_config.single_message,
     }
     wandb.init(
         project=project_name,
