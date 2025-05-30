@@ -187,7 +187,7 @@ class MPNNConfig:
     decoder_learning_rate: float = 1e-3
     backbone_learning_rate: float = 1e-3
     encoder_learning_rate: float = 1e-1
-    message_weight_lr: float = 1e-1
+    message_weight_lr: float = 1e-3
     message_weight_decay: float = 0.0
     dropout_prob: float = 0.0
     constant_aggregation_weight_init: float | None = (
@@ -196,6 +196,10 @@ class MPNNConfig:
     aggregation_weights_softmax: bool = True
     disable_jit: bool = False
     differential_messages: bool = False
+    grad_clipping: float = 1.0
+    mod_steepness: float = 25.0
+    nb_msg_passing_steps: int = 1
+
     # These are not yet settled parameters, but can be used to control the training process
     aggregation_modes: list[AggregationMode] = [
         AggregationMode.MAX,
@@ -206,20 +210,17 @@ class MPNNConfig:
         AggregationMode.ATTENTION,
     ]
     max_steps: int = 4000
-    hidden_dim: int = 64
+    hidden_dim: int = 128
     hint_teacher_forcing: float = 0.0
     gated: bool = False
     use_triplets: bool = False
-    modulus_n: float = 2.0
-    softmax_temperature: float = 0.5
-    mod_steepness: float = 50.0
-    nb_msg_passing_steps: int = 1
+    modulus_n: float = 16.0
+    attention_softmax_temperature: float = 0.5
     turn_off_forcing_at: int | None = None  # If None, never turn off forcing
     msg_weight_gumbel: bool = False  # If True, use Gumbel softmax for message weights
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
     n_is_learned: bool = False  # If True, learn the modulus n parameter
     per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
-    grad_clipping: float = 1.0
     point_wise_softmax: bool = False  # If True, use point-wise softmax for messages
     single_message: bool = False  # If True, use a single message per edge
 
@@ -281,7 +282,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         aggregation_weights_softmax=mpnn_config.aggregation_weights_softmax,
         constant_aggregation_weight_init=mpnn_config.constant_aggregation_weight_init,
         modulus_n=mpnn_config.modulus_n,
-        softmax_temperature=mpnn_config.softmax_temperature,
+        softmax_temperature=mpnn_config.attention_softmax_temperature,
         mod_steepness=mpnn_config.mod_steepness,
         msg_weight_gumbel=mpnn_config.msg_weight_gumbel,
         msg_weight_softmax_temperature=mpnn_config.msg_weight_softmax_temperature,
@@ -347,7 +348,7 @@ def _initialize_wandb(
         "message_weight_lr": mpnn_config.message_weight_lr,
         "constant_aggregation_weight_init": mpnn_config.constant_aggregation_weight_init,
         "modulus_n": mpnn_config.modulus_n,
-        "softmax_temperature": mpnn_config.softmax_temperature,
+        "softmax_temperature": mpnn_config.attention_softmax_temperature,
         "mod_steepness": mpnn_config.mod_steepness,
         "nb_msg_passing_steps": mpnn_config.nb_msg_passing_steps,
         "turn_off_forcing_at": mpnn_config.turn_off_forcing_at,
