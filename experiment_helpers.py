@@ -1,3 +1,4 @@
+from email import message
 import os
 from typing import Any
 import jax
@@ -6,6 +7,7 @@ from attr import dataclass
 import jax.core
 import clrs
 
+from clrs._src.probing import graph
 from jakobs import processors
 from jakobs import baselines
 from flax import nnx
@@ -14,7 +16,7 @@ import numpy as np
 
 import wandb
 import pickle
-from jakobs.processors import AggregationMode
+from jakobs.processors import MPNN, AggregationMode
 
 
 def _iterate_sampler(sampler, batch_size):
@@ -374,8 +376,34 @@ import jax.numpy as jnp
 
 
 # Initialize a new W&B run at the start of the notebook
+
+
+@jax.jit
+def make_model_predictions(
+    graphdef, params, fixed_params, val_feedback, test_feedback, rng_key
+):
+    model = nnx.merge(graphdef, params, fixed_params)
+    predictions_val, _, _ = model.predict(rng_key, val_feedback.features)
+    predictions, _, mean_message_weight = model.predict(rng_key, test_feedback.features)
+    params = model.get_params()
+    fixed_params = model.get_fixed_state()
+
+    return predictions_val, predictions, mean_message_weight
+
+
+def get_evaluation_scores(
+    graphdef, params, fixed_params, val_feedback, test_feedback, rng_key
+):
+    predictions_val, predictions, message_weights = make_model_predictions(
+        graphdef, params, fixed_params, val_feedback, test_feedback, rng_key
+    )
+    out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
+    out = clrs.evaluate(test_feedback.outputs, predictions)
+    return out_val, out, message_weights
+
+
 def evaluate_model(
-    model,
+    model: baselines.BaselineModel,
     val_feedback,
     test_feedback,
     step,
@@ -387,10 +415,12 @@ def evaluate_model(
     per_node_agg_weights=False,
 ):
     print("starting evaluation")
-    predictions_val, _ = model.predict(rng_key, val_feedback.features)
-    out_val = clrs.evaluate(val_feedback.outputs, predictions_val)
-    predictions, _ = model.predict(rng_key, test_feedback.features)
-    out = clrs.evaluate(test_feedback.outputs, predictions)
+    graphdef = model.get_graph_def()
+    params = model.get_params()
+    fixed_params = model.get_fixed_state()
+    out_val, out, message_weights = get_evaluation_scores(
+        graphdef, params, fixed_params, val_feedback, test_feedback, rng_key
+    )
 
     val_acc = out_val["score"]
     test_acc = out["score"]
@@ -402,13 +432,6 @@ def evaluate_model(
     else:
         messages_magnitude = grad_magnitudes[baselines.MESSAGE_LABEL]
 
-    intermediates = nnx.pop(model.net.processor, nnx.Intermediate)
-    message_weights_tuple = intermediates["mean_message_weights"].value
-    for elem in reversed(message_weights_tuple):
-        if not isinstance(elem, jax.core.Tracer):
-            print(elem)
-            message_weights = elem
-            break
     message_weights = [float(value) for value in message_weights]
     message_weights_dict = {
         f"message_weights_{i}": val for i, val in enumerate(message_weights)

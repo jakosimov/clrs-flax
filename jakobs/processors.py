@@ -906,12 +906,6 @@ class PGN(Processor):
                 for _ in range(len(self.reduction_modes))
             ]
 
-        self.sow(
-            nnx.Intermediate,
-            "mean_message_weights",
-            jnp.zeros(len(self.reduction_modes)),
-        )
-
         if not per_node_agg_weights:
             dimension = (
                 (len(self.reduction_modes),)
@@ -1021,7 +1015,7 @@ class PGN(Processor):
         z: Array,
         repred: bool,
         rng_key=None,
-    ) -> Array:
+    ) -> tuple[Array, Array]:
         """Message aggregation function.
         msgs: Messages. (B, N, N, H)
         adj_mat: Graph adjacency matrix. (B, N, N)
@@ -1059,17 +1053,10 @@ class PGN(Processor):
                 weights / self.msg_weight_softmax_temperature, axis=-1
             )
 
-        if repred:
-            mean_message_weights = jnp.mean(weights, axis=(0, 1, 2))  # (R,)
-            self.sow(
-                nnx.Intermediate,
-                "mean_message_weights",
-                mean_message_weights,
-            )
-
+        mean_message_weights = jnp.mean(weights, axis=(0, 1, 2))  # (R,)
         weighted_msgs = msgs_stacked * weights  # (B, N, H, R)
         msgs_aggregated = jnp.sum(weighted_msgs, axis=-1)  # (B, N, H)
-        return msgs_aggregated
+        return msgs_aggregated, mean_message_weights
 
     def update(self, z: Array, msgs: Array):
         h_1 = self.o1(z)  # (B, N, H)
@@ -1089,7 +1076,7 @@ class PGN(Processor):
         repred: bool,
         rng_key: Optional[Array] = None,
         **unused_kwargs,
-    ) -> Tuple[Array, Optional[Array]]:
+    ) -> Tuple[Array, Optional[Array], Optional[Array]]:
         """MPNN inference step.
         Args:
           node_fts: Node features. (B, N, H)
@@ -1122,7 +1109,7 @@ class PGN(Processor):
         msgs = self.message(z, edge_fts, graph_fts)  # (B, N, N, H)
 
         # Message Aggregation
-        agg_msgs = self.aggregate(
+        agg_msgs, mean_message_weights = self.aggregate(
             msgs=msgs, adj_mat=adj_mat, z=z, rng_key=rng_key, repred=repred
         )  # (B, N, H)
 
@@ -1141,7 +1128,11 @@ class PGN(Processor):
             )
             ret = ret * gate + hidden * (1 - gate)
 
-        return ret, tri_msgs  # pytype: disable=bad-return-type  # numpy-scalars
+        return (
+            ret,
+            tri_msgs,
+            mean_message_weights,
+        )  # pytype: disable=bad-return-type  # numpy-scalars
 
     @property
     def using_triplets(self) -> bool:

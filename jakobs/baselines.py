@@ -224,9 +224,9 @@ class BaselineModel(nnx.Module, model.Model):
             return_all_outputs=False,
         )
         if self.debug:
-            output_preds, hint_preds, _ = outputs
+            output_preds, hint_preds, _, _ = outputs
         else:
-            output_preds, hint_preds = outputs
+            output_preds, hint_preds, _ = outputs
 
         nb_nodes = _nb_nodes(feedback, is_chunked=False)
         lengths = feedback.features.lengths
@@ -271,7 +271,7 @@ class BaselineModel(nnx.Module, model.Model):
         if self.debug:
             outs, hint_preds, hidden_states = net_outputs
         else:
-            outs, hint_preds = net_outputs
+            outs, hint_preds, mean_message_weights = net_outputs
         outs = decoders.postprocess(
             self._spec[algorithm_index],
             outs,
@@ -282,7 +282,7 @@ class BaselineModel(nnx.Module, model.Model):
         if self.debug:
             return outs, hint_preds, hidden_states
         else:
-            return outs, hint_preds
+            return outs, hint_preds, mean_message_weights
 
     def get_params(self):
         _, params_state, _ = self.split_model()

@@ -254,7 +254,7 @@ class NetFlax(nnx.Module):
             return_all_outputs=return_all_outputs,
             rng_key=rng_key,
         )
-        mp_state, lean_mp_state = self._msg_passing_step(
+        mp_state, lean_mp_state, mean_message_weights = self._msg_passing_step(
             mp_state=mp_state, i=0, first_step=True, **common_args
         )
 
@@ -286,9 +286,9 @@ class NetFlax(nnx.Module):
 
         if self.debug:
             hiddens = jnp.stack([v for v in accum_mp_state.hiddens])
-            return output_preds, hint_preds, hiddens
+            return output_preds, hint_preds, hiddens, mean_message_weights
 
-        return output_preds, hint_preds
+        return output_preds, hint_preds, mean_message_weights
 
     def _msg_passing_step(
         self,
@@ -364,17 +364,19 @@ class NetFlax(nnx.Module):
                     )
                 )
 
-        hiddens, output_preds_cand, hint_preds, lstm_state = self._one_step_pred(
-            inputs,
-            cur_hint,
-            mp_state.hiddens,
-            batch_size,
-            nb_nodes,
-            spec,
-            encs,
-            decs,
-            repred,
-            rng_key=rng_key,
+        hiddens, output_preds_cand, hint_preds, lstm_state, mean_message_weights = (
+            self._one_step_pred(
+                inputs,
+                cur_hint,
+                mp_state.hiddens,
+                batch_size,
+                nb_nodes,
+                spec,
+                encs,
+                decs,
+                repred,
+                rng_key=rng_key,
+            )
         )
 
         if first_step:
@@ -404,7 +406,10 @@ class NetFlax(nnx.Module):
 
         # Complying to jax.scan, the first returned value is the state we carry over
         # the second value is the output that will be stacked over steps.
-        return new_mp_state, accum_mp_state
+        if first_step:
+            return new_mp_state, accum_mp_state, mean_message_weights
+        else:
+            return new_mp_state, accum_mp_state
 
     def _one_step_pred(
         self,
@@ -450,7 +455,7 @@ class NetFlax(nnx.Module):
         # PROCESS ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
         nxt_hidden = hidden
         for _ in range(self.nb_msg_passing_steps):
-            nxt_hidden, nxt_edge = self.processor(
+            nxt_hidden, nxt_edge, mean_message_weights = self.processor(
                 node_fts=node_fts,
                 edge_fts=edge_fts,
                 graph_fts=graph_fts,
@@ -491,7 +496,13 @@ class NetFlax(nnx.Module):
             repred=repred,
         )
 
-        return nxt_hidden, output_preds, hint_preds, nxt_lstm_state
+        return (
+            nxt_hidden,
+            output_preds,
+            hint_preds,
+            nxt_lstm_state,
+            mean_message_weights,
+        )
 
 
 def _data_dimensions(features: _Features) -> Tuple[int, int]:
