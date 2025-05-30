@@ -187,9 +187,7 @@ class MPNNConfig:
     decoder_learning_rate: float = 1e-3
     backbone_learning_rate: float = 1e-3
     encoder_learning_rate: float = 1e-1
-    message_weight_lr: float = 1e-3
     message_weight_decay: float = 0.0
-    dropout_prob: float = 0.0
     constant_aggregation_weight_init: float | None = (
         0.0  # If None, use random initialization
     )
@@ -199,7 +197,14 @@ class MPNNConfig:
     grad_clipping: float = 1.0
     mod_steepness: float = 25.0
     nb_msg_passing_steps: int = 1
-
+    hidden_dim: int = 128
+    attention_softmax_temperature: float = 0.5
+    gated: bool = False
+    use_triplets: bool = False
+    modulus_n: float = 16.0
+    turn_off_forcing_at: int | None = None  # If None, never turn off forcing
+    hint_teacher_forcing: float = 0.0
+    n_is_learned: bool = False  # If True, learn the modulus n parameter
     # These are not yet settled parameters, but can be used to control the training process
     aggregation_modes: list[AggregationMode] = [
         AggregationMode.MAX,
@@ -210,19 +215,13 @@ class MPNNConfig:
         AggregationMode.ATTENTION,
     ]
     max_steps: int = 4000
-    hidden_dim: int = 128
-    hint_teacher_forcing: float = 0.0
-    gated: bool = False
-    use_triplets: bool = False
-    modulus_n: float = 16.0
-    attention_softmax_temperature: float = 0.5
-    turn_off_forcing_at: int | None = None  # If None, never turn off forcing
     msg_weight_gumbel: bool = False  # If True, use Gumbel softmax for message weights
     msg_weight_softmax_temperature: float = 1.0  # Temperature for Gumbel softmax
-    n_is_learned: bool = False  # If True, learn the modulus n parameter
     per_node_agg_weights: bool = False  # If True, use per-node aggregation weights
     point_wise_softmax: bool = False  # If True, use point-wise softmax for messages
     single_message: bool = False  # If True, use a single message per edge
+    message_weight_lr: float = 1e-3
+    dropout_prob: float = 0.0
 
 
 def make_mpnn_processor_factory(
