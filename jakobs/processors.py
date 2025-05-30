@@ -30,6 +30,15 @@ BIG_NUMBER = 1e6
 PROCESSOR_TAG = "clrs_processor"
 
 
+def dropout(x: Array, dropout_prob: float, rng_key: Array) -> Array:
+    """Applies dropout to the input tensor."""
+    if dropout_prob <= 0.0:
+        return x
+    keep_prob = 1.0 - dropout_prob
+    mask: Array = jax.random.bernoulli(rng_key, p=keep_prob, shape=x.shape)
+    return jax.lax.select(mask, x / keep_prob, jnp.zeros_like(x))
+
+
 class Processor(nnx.Module):
     """Processor abstract base class."""
 
@@ -784,6 +793,7 @@ class PGN(Processor):
         per_node_agg_weights: bool = False,
         point_wise_softmax: bool = False,
         single_message: bool = False,
+        dropout_rate: float = 0.0,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -806,6 +816,7 @@ class PGN(Processor):
         self.per_node_agg_weights = per_node_agg_weights
         self.point_wise_softmax = point_wise_softmax
         self.single_message = single_message
+        self.dropout_rate = dropout_rate
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -1026,6 +1037,7 @@ class PGN(Processor):
           graph_fts: Graph features. (B, H)
           adj_mat: Graph adjacency matrix. (B, N, N)
           hidden: Hidden features. (B, N, H)
+          repred: Whether this is a re-prediction step. False for training, True for inference.
           **kwargs: Extra kwargs.
         """
 
@@ -1053,6 +1065,9 @@ class PGN(Processor):
         agg_msgs = self.aggregate(
             msgs=msgs, adj_mat=adj_mat, z=z, rng_key=rng_key, repred=repred
         )  # (B, N, H)
+
+        if rng_key is not None and self.dropout_rate > 0.0 and not repred:
+            agg_msgs = dropout(agg_msgs, self.dropout_rate, rng_key=rng_key)
 
         # Updated node features
         ret = self.update(z, agg_msgs)  # (B, N, H)

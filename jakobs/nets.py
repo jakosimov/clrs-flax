@@ -54,6 +54,15 @@ class _MessagePassingScanState:
     hiddens: Array
 
 
+def dropout(x: Array, dropout_prob: float, rng_key: _Key) -> Array:
+    """Applies dropout to the input tensor."""
+    if dropout_prob <= 0.0:
+        return x
+    keep_prob = 1.0 - dropout_prob
+    mask: Array = jax.random.bernoulli(rng_key, p=keep_prob, shape=x.shape)
+    return jax.lax.select(mask, x / keep_prob, jnp.zeros_like(x))
+
+
 class HintRepredMode(StrEnum):
     """Hint reprediction modes.
 
@@ -115,8 +124,8 @@ class NetFlax(nnx.Module):
 
         self.algorithm_indices: List[int] = list(range(len(spec)))
 
-        if self._dropout_prob > 0.0:
-            self.dropout = nnx.Dropout(rate=self._dropout_prob, rngs=rngs)
+        # if self._dropout_prob > 0.0:
+        #     self.dropout = nnx.Dropout(rate=self._dropout_prob, rngs=rngs)
 
     def _construct_encoders_decoders(
         self, rngs: nnx.Rngs
@@ -453,8 +462,12 @@ class NetFlax(nnx.Module):
                 repred=repred,
             )
 
-        if not repred and self._dropout_prob > 0.0:  # dropout only on training
-            nxt_hidden = self.dropout(nxt_hidden)
+        if (
+            not repred and self._dropout_prob > 0.0 and rng_key is not None
+        ):  # dropout only on training
+            nxt_hidden = dropout(
+                nxt_hidden, dropout_prob=self._dropout_prob, rng_key=rng_key
+            )
 
         nxt_lstm_state = None
 

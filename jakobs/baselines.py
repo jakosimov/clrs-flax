@@ -293,6 +293,8 @@ class BaselineModel(nnx.Module, model.Model):
         def filter_fn(v, x):
             if "mean_message_weights" in v:
                 return False
+            if "dropout" in v:
+                return False
             return True
 
         graphdef, params, fixed_state = nnx.split(
