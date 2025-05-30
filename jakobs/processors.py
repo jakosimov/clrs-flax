@@ -752,15 +752,29 @@ def make_aggregation_function(
 class MessageWeightMLP(nnx.Module):
     """MLP for computing message weights."""
 
-    def __init__(self, in_size: int, n_aggregation_methods: int, rngs: nnx.Rngs):
+    def __init__(
+        self,
+        in_size: int,
+        n_aggregation_methods: int,
+        rngs: nnx.Rngs,
+        constant_init: float | None = None,
+    ):
         super().__init__()
         self.layer1 = nnx.Linear(in_size, n_aggregation_methods, rngs=rngs)
         # self.layer2 = nnx.Linear(
         #     out_size, out_size, rngs=rngs, bias_init=jax.nn.initializers.constant(50.0)
         # )
-        self.layer2 = nnx.Linear(
-            n_aggregation_methods, n_aggregation_methods, rngs=rngs
-        )
+        if constant_init is not None:
+            self.layer2 = nnx.Linear(
+                n_aggregation_methods,
+                n_aggregation_methods,
+                rngs=rngs,
+                bias_init=jax.nn.initializers.constant(constant_init),
+            )
+        else:
+            self.layer2 = nnx.Linear(
+                n_aggregation_methods, n_aggregation_methods, rngs=rngs
+            )
 
     def __call__(self, z: Array) -> Array:
         """Compute message weights."""
@@ -771,21 +785,31 @@ class PointwiseMessageWeightMLP(nnx.Module):
     """MLP for computing message weights."""
 
     def __init__(
-        self, in_size: int, n_aggregation_methods: int, out_size: int, rngs: nnx.Rngs
+        self,
+        in_size: int,
+        n_aggregation_methods: int,
+        out_size: int,
+        rngs: nnx.Rngs,
+        constant_init: float | None = None,
     ):
         super().__init__()
         self.n_aggregation_methods = n_aggregation_methods
         self.in_size = in_size
         self.out_size = out_size
         self.layer1 = nnx.Linear(in_size, n_aggregation_methods * out_size, rngs=rngs)
-        # self.layer2 = nnx.Linear(
-        #     out_size, out_size, rngs=rngs, bias_init=jax.nn.initializers.constant(50.0)
-        # )
-        self.layer2 = nnx.Linear(
-            n_aggregation_methods * out_size,
-            n_aggregation_methods * out_size,
-            rngs=rngs,
-        )
+        if constant_init is not None:
+            self.layer2 = nnx.Linear(
+                n_aggregation_methods * out_size,
+                n_aggregation_methods * out_size,
+                rngs=rngs,
+                bias_init=jax.nn.initializers.constant(constant_init),
+            )
+        else:
+            self.layer2 = nnx.Linear(
+                n_aggregation_methods * out_size,
+                n_aggregation_methods * out_size,
+                rngs=rngs,
+            )
 
     def __call__(self, z: Array) -> Array:
         """Compute message weights."""
@@ -915,12 +939,14 @@ class PGN(Processor):
                     n_aggregation_methods=len(self.reduction_modes),
                     out_size=self.out_size,
                     rngs=rngs,
+                    constant_init=constant_aggregation_weight_init,
                 )
             else:
                 self.message_weight_mlp = MessageWeightMLP(
                     in_size=z_size,
                     n_aggregation_methods=len(self.reduction_modes),
                     rngs=rngs,
+                    constant_init=constant_aggregation_weight_init,
                 )
 
         self.aggregation_modules: List[AggregationFunction] = [

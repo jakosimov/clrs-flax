@@ -328,6 +328,7 @@ DECODER_LABEL = "decoders"
 PROCESSOR_LABEL = "processor"
 ENCODER_LABEL = "encoders"
 MESSAGE_LABEL = "message_weights"
+MESSAGE_WEIGHTS_MLP = "message_weight_mlp"
 
 
 class BaselineOptimizer:
@@ -362,6 +363,11 @@ class BaselineOptimizer:
                 weight_decay=message_weight_decay,
                 grad_clip_max_norm=grad_clip_max_norm,
             ),
+            MESSAGE_WEIGHTS_MLP: self._mk_grad_clip_optimizer(
+                learning_rate=message_weight_lr,
+                weight_decay=message_weight_decay,
+                grad_clip_max_norm=grad_clip_max_norm,
+            ),
         }
 
         param_labels = traverse_util.path_aware_map(
@@ -371,7 +377,15 @@ class BaselineOptimizer:
                 else (
                     ENCODER_LABEL
                     if ENCODER_LABEL in path
-                    else MESSAGE_LABEL if MESSAGE_LABEL in path else PROCESSOR_LABEL
+                    else (
+                        MESSAGE_LABEL
+                        if MESSAGE_LABEL in path
+                        else (
+                            MESSAGE_WEIGHTS_MLP
+                            if MESSAGE_WEIGHTS_MLP in path
+                            else PROCESSOR_LABEL
+                        )
+                    )
                 )
             ),
             params,
