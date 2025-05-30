@@ -760,7 +760,14 @@ class MessageWeightMLP(nnx.Module):
         constant_init: float | None = None,
     ):
         super().__init__()
-        self.layer1 = nnx.Linear(in_size, n_aggregation_methods, rngs=rngs)
+        self.layer1 = nnx.Linear(
+            in_size,
+            n_aggregation_methods,
+            rngs=rngs,
+            kernel_init=jax.nn.initializers.variance_scaling(
+                mode="fan_in", distribution="truncated_normal", scale=0.1
+            ),
+        )
         # self.layer2 = nnx.Linear(
         #     out_size, out_size, rngs=rngs, bias_init=jax.nn.initializers.constant(50.0)
         # )
@@ -770,6 +777,9 @@ class MessageWeightMLP(nnx.Module):
                 n_aggregation_methods,
                 rngs=rngs,
                 bias_init=jax.nn.initializers.constant(constant_init),
+                kernel_init=jax.nn.initializers.variance_scaling(
+                    mode="fan_in", distribution="truncated_normal", scale=0.1
+                ),
             )
         else:
             self.layer2 = nnx.Linear(
@@ -796,13 +806,23 @@ class PointwiseMessageWeightMLP(nnx.Module):
         self.n_aggregation_methods = n_aggregation_methods
         self.in_size = in_size
         self.out_size = out_size
-        self.layer1 = nnx.Linear(in_size, n_aggregation_methods * out_size, rngs=rngs)
+        self.layer1 = nnx.Linear(
+            in_size,
+            n_aggregation_methods * out_size,
+            rngs=rngs,
+            kernel_init=jax.nn.initializers.variance_scaling(
+                mode="fan_in", distribution="truncated_normal", scale=0.1
+            ),
+        )
         if constant_init is not None:
             self.layer2 = nnx.Linear(
                 n_aggregation_methods * out_size,
                 n_aggregation_methods * out_size,
                 rngs=rngs,
                 bias_init=jax.nn.initializers.constant(constant_init),
+                kernel_init=jax.nn.initializers.variance_scaling(
+                    mode="fan_in", distribution="truncated_normal", scale=0.1
+                ),
             )
         else:
             self.layer2 = nnx.Linear(
