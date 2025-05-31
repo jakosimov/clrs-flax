@@ -29,6 +29,17 @@ _Stage = specs.Stage
 _Type = specs.Type
 
 
+class IdentityInitializer(jax.nn.initializers.Initializer):
+    """Initializer that does nothing, used for identity layers."""
+
+    def __init__(self, size: int):
+        super().__init__()
+        self.size = size
+
+    def __call__(self, key, shape, dtype=jnp.float32):
+        return jax.numpy.eye(self.size, dtype=dtype)  # type: ignore[return-value]
+
+
 class Linear(nnx.Module):
     """Linear module.
 
@@ -40,10 +51,13 @@ class Linear(nnx.Module):
 
     def __init__(self, input_dim: int, output_dim: int, rngs: nnx.Rngs):
         super().__init__()
-        self.linear1 = nnx.Linear(
-            input_dim, output_dim, rngs=rngs, kernel_init=nnx.initializers.ones_init()
+        self.linear1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear2 = nnx.Linear(
+            output_dim,
+            output_dim,
+            rngs=rngs,
+            kernel_init=IdentityInitializer(output_dim),
         )
-        self.linear2 = nnx.Linear(output_dim, output_dim, rngs=rngs)
 
     def __call__(self, x: Array) -> Array:
         return self.linear2(jax.nn.relu(self.linear1(x)))  # type: ignore[return-value]

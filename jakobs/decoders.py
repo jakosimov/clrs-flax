@@ -69,6 +69,17 @@ def log_sinkhorn(
     return x
 
 
+class IdentityInitializer(jax.nn.initializers.Initializer):
+    """Initializer that does nothing, used for identity layers."""
+
+    def __init__(self, size: int):
+        super().__init__()
+        self.size = size
+
+    def __call__(self, key, shape, dtype=jnp.float32):
+        return jax.numpy.eye(self.size, dtype=dtype)  # type: ignore[return-value]
+
+
 class Linear(nnx.Module):
     """Linear module.
 
@@ -82,7 +93,10 @@ class Linear(nnx.Module):
         super().__init__()
         self.linear1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
         self.linear2 = nnx.Linear(
-            output_dim, output_dim, rngs=rngs, kernel_init=nnx.initializers.ones_init()
+            output_dim,
+            output_dim,
+            rngs=rngs,
+            kernel_init=IdentityInitializer(output_dim),
         )
 
     def __call__(self, x: Array) -> Array:
