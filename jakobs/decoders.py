@@ -91,12 +91,13 @@ class Linear(nnx.Module):
 
     def __init__(self, input_dim: int, output_dim: int, rngs: nnx.Rngs):
         super().__init__()
-        self.linear1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear1 = nnx.Linear(
+            input_dim, input_dim, rngs=rngs, kernel_init=IdentityInitializer(input_dim)
+        )
         self.linear2 = nnx.Linear(
-            output_dim,
+            input_dim,
             output_dim,
             rngs=rngs,
-            kernel_init=IdentityInitializer(output_dim),
         )
 
     def __call__(self, x: Array) -> Array:
