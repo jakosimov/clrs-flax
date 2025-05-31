@@ -329,6 +329,7 @@ PROCESSOR_LABEL = "processor"
 ENCODER_LABEL = "encoders"
 MESSAGE_LABEL = "message_weights"
 MESSAGE_WEIGHTS_MLP = "message_weight_mlp"
+TRIPLET_MODULE_LABEL = "triplet_module"
 
 
 class BaselineOptimizer:
@@ -353,6 +354,9 @@ class BaselineOptimizer:
                 learning_rate=backbone_lr, grad_clip_max_norm=grad_clip_max_norm
             ),
             DECODER_LABEL: self._mk_grad_clip_optimizer(
+                learning_rate=decoder_lr, grad_clip_max_norm=grad_clip_max_norm
+            ),
+            TRIPLET_MODULE_LABEL: self._mk_grad_clip_optimizer(
                 learning_rate=decoder_lr, grad_clip_max_norm=grad_clip_max_norm
             ),
             ENCODER_LABEL: self._mk_grad_clip_optimizer(

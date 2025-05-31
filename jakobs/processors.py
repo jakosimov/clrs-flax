@@ -406,6 +406,7 @@ class TripletMessageModule(nnx.Module):
         z_size: int,
         edge_fts_size: int,
         graph_fts_size: int,
+        out_size: int,
         rngs: nnx.Rngs,
     ):
         self.t_1 = nnx.Linear(z_size, nb_triplet_fts, rngs=rngs)
@@ -415,6 +416,8 @@ class TripletMessageModule(nnx.Module):
         self.t_e_2 = nnx.Linear(edge_fts_size, nb_triplet_fts, rngs=rngs)
         self.t_e_3 = nnx.Linear(edge_fts_size, nb_triplet_fts, rngs=rngs)
         self.t_g = nnx.Linear(graph_fts_size, nb_triplet_fts, rngs=rngs)
+
+        self.o3 = nnx.Linear(nb_triplet_fts, out_size, rngs=rngs)
 
     def __call__(self, z, edge_fts, graph_fts):
         """Triplet messages, as done by Dudzik and Velickovic (2022)."""
@@ -426,7 +429,7 @@ class TripletMessageModule(nnx.Module):
         tri_e_3 = self.t_e_3(edge_fts)
         tri_g = self.t_g(graph_fts)
 
-        return (
+        triplets = (
             jnp.expand_dims(tri_1, axis=(2, 3))  #   (B, N, 1, 1, H)
             + jnp.expand_dims(tri_2, axis=(1, 3))  # + (B, 1, N, 1, H)
             + jnp.expand_dims(tri_3, axis=(1, 2))  # + (B, 1, 1, N, H)
@@ -435,6 +438,10 @@ class TripletMessageModule(nnx.Module):
             + jnp.expand_dims(tri_e_3, axis=1)  # + (B, 1, N, N, H)
             + jnp.expand_dims(tri_g, axis=(1, 2, 3))  # + (B, 1, 1, 1, H)
         )
+
+        tri_msgs = self.o3(jnp.max(triplets, axis=1))
+
+        return tri_msgs  # (B, N, N, H)
 
 
 class MLP(nnx.Module):
@@ -982,9 +989,9 @@ class PGN(Processor):
                 z_size=z_size,
                 edge_fts_size=edge_fts_size,
                 graph_fts_size=graph_fts_size,
+                out_size=self.out_size,
                 rngs=rngs,
             )
-            self.o3 = nnx.Linear(nb_triplet_fts, self.out_size, rngs=rngs)
 
         self.o1 = nnx.Linear(z_size, self.out_size, rngs=rngs)
         self.o2 = nnx.Linear(self.out_size, self.out_size, rngs=rngs)
@@ -1120,9 +1127,7 @@ class PGN(Processor):
 
         if self.use_triplets:
             # Triplet messages, as done by Dudzik and Velickovic (2022)
-            triplets = self.triplet_module(z, edge_fts, graph_fts)
-            tri_msgs = self.o3(jnp.max(triplets, axis=1))  # (B, N, N, H)
-
+            tri_msgs = self.triplet_module(z, edge_fts, graph_fts)
             if self.activation is not None:
                 tri_msgs = self.activation(tri_msgs)
 
