@@ -387,7 +387,11 @@ class BaselineOptimizer:
                         else (
                             MESSAGE_WEIGHTS_MLP
                             if MESSAGE_WEIGHTS_MLP in path
-                            else PROCESSOR_LABEL
+                            else (
+                                TRIPLET_MODULE_LABEL
+                                if TRIPLET_MODULE_LABEL in path
+                                else PROCESSOR_LABEL
+                            )
                         )
                     )
                 )
