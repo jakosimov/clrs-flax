@@ -37,7 +37,7 @@ class IdentityInitializer(jax.nn.initializers.Initializer):
         self.size = size
 
     def __call__(self, key, shape, dtype=jnp.float32):
-        return jax.numpy.eye(self.size, dtype=dtype)  # type: ignore[return-value]
+        return jax.numpy.eye(self.size, dtype=dtype) + jax.random.normal(key, shape=(self.size, self.size)) * 0.01  # type: ignore[return-value]
 
 
 class Linear(nnx.Module):
