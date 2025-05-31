@@ -21,6 +21,7 @@ from clrs._src import specs
 import haiku as hk
 import flax.nnx as nnx
 import jax.numpy as jnp
+import jax
 
 _DataPoint = probing.DataPoint
 _Location = specs.Location
