@@ -223,7 +223,8 @@ class MPNNConfig:
     point_wise_softmax: bool = False  # If True, use point-wise softmax for messages
     single_message: bool = False  # If True, use a single message per edge
     message_weight_lr: float = 1e-3
-    dropout_prob: float = 0.0
+    state_dropout_prob: float = 0.0
+    msg_dropout_prob: float = 0.0  # Dropout probability for messages
 
 
 def make_mpnn_processor_factory(
@@ -293,7 +294,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         per_node_agg_weights=mpnn_config.per_node_agg_weights,
         point_wise_softmax=mpnn_config.point_wise_softmax,
         single_message=mpnn_config.single_message,
-        dropout_rate=mpnn_config.dropout_prob,
+        dropout_rate=mpnn_config.msg_dropout_prob,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -307,7 +308,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         use_lstm=False,
         checkpoint_path="/tmp/checkpt",
         freeze_processor=False,
-        dropout_prob=mpnn_config.dropout_prob,
+        dropout_prob=mpnn_config.state_dropout_prob,
         hint_teacher_forcing=mpnn_config.hint_teacher_forcing,
         rngs=rngs,
         nb_msg_passing_steps=mpnn_config.nb_msg_passing_steps,
@@ -344,7 +345,8 @@ def _initialize_wandb(
         "log_every": log_every,
         "hint_teacher_forcing": mpnn_config.hint_teacher_forcing,
         "hidden_dim": mpnn_config.hidden_dim,
-        "dropout_prob": mpnn_config.dropout_prob,
+        "state_dropout_prob": mpnn_config.state_dropout_prob,
+        "msg_dropout_prob": mpnn_config.msg_dropout_prob,
         "use_triplets": mpnn_config.use_triplets,
         "gated": mpnn_config.gated,
         "differential_messages": mpnn_config.differential_messages,
@@ -533,7 +535,7 @@ def train_model(
             rng_key=rng_key,
         )
         rng_key = new_rng_key
-        if step % log_every == 0:
+        if step % log_every == 0 and step > 100:
             evaluate_model(
                 model,
                 feedback,
