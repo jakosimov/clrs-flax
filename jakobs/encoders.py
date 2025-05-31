@@ -28,6 +28,24 @@ _Stage = specs.Stage
 _Type = specs.Type
 
 
+class Linear(nnx.Module):
+    """Linear module.
+
+    This module is used to decode the feature vector into the output data.
+    The decoder is a linear layer followed by a non-linear activation function.
+    The activation function is ReLU by default, but can be changed to other
+    functions such as sigmoid or tanh.
+    """
+
+    def __init__(self, input_dim: int, output_dim: int, rngs: nnx.Rngs):
+        super().__init__()
+        self.linear1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear2 = nnx.Linear(output_dim, output_dim, rngs=rngs)
+
+    def __call__(self, x: Array) -> Array:
+        return self.linear2(jax.nn.relu(self.linear1(x)))  # type: ignore[return-value]
+
+
 class EncoderInitialiser(StrEnum):
     """Initialiser for the encoder.
 
@@ -67,7 +85,7 @@ class OneWayEncoder(Encoder):
 
     def __init__(self, output_dim: int, rngs: nnx.Rngs, input_dim=1):
         super().__init__(output_dim, rngs)
-        self.linear = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear = Linear(input_dim, output_dim, rngs=rngs)
 
     def __call__(self, x: Array) -> Array:
         return self.linear(x)
@@ -84,8 +102,8 @@ class TwoWayEncoder(Encoder):
 
     def __init__(self, output_dim: int, rngs: nnx.Rngs):
         super().__init__(output_dim, rngs)
-        self.linear_1 = nnx.Linear(1, output_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(1, output_dim, rngs=rngs)
+        self.linear_1 = Linear(1, output_dim, rngs=rngs)
+        self.linear_2 = Linear(1, output_dim, rngs=rngs)
 
     def __call__(self, x: Array) -> Array:
         return self.linear_1(x)

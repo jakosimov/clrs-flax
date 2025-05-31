@@ -69,6 +69,24 @@ def log_sinkhorn(
     return x
 
 
+class Linear(nnx.Module):
+    """Linear module.
+
+    This module is used to decode the feature vector into the output data.
+    The decoder is a linear layer followed by a non-linear activation function.
+    The activation function is ReLU by default, but can be changed to other
+    functions such as sigmoid or tanh.
+    """
+
+    def __init__(self, input_dim: int, output_dim: int, rngs: nnx.Rngs):
+        super().__init__()
+        self.linear1 = nnx.Linear(input_dim, output_dim, rngs=rngs)
+        self.linear2 = nnx.Linear(output_dim, output_dim, rngs=rngs)
+
+    def __call__(self, x: Array) -> Array:
+        return self.linear2(jax.nn.relu(self.linear1(x)))  # type: ignore[return-value]
+
+
 class Decoder(nnx.Module):
     """Decoder module.
 
@@ -88,7 +106,7 @@ class Decoder(nnx.Module):
 class NodeFeatureDecoder(Decoder):
     def __init__(self, output_dim: int, rngs: nnx.Rngs, h_t_dim: int):
         super().__init__()
-        self.linear = nnx.Linear(h_t_dim, output_dim, rngs=rngs)
+        self.linear = Linear(h_t_dim, output_dim, rngs=rngs)
 
     def __call__(self, h_t: jax.Array) -> Array:
         return self.linear(h_t)
@@ -104,10 +122,10 @@ class NodePointerDecoder(Decoder):
         output_dim: int,
     ):
         super().__init__()
-        self.linear_1 = nnx.Linear(h_dim, mid_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(h_dim, mid_dim, rngs=rngs)
-        self.linear_3 = nnx.Linear(edge_fts_dim, mid_dim, rngs=rngs)
-        self.linear_4 = nnx.Linear(mid_dim, output_dim, rngs=rngs)
+        self.linear_1 = Linear(h_dim, mid_dim, rngs=rngs)
+        self.linear_2 = Linear(h_dim, mid_dim, rngs=rngs)
+        self.linear_3 = Linear(edge_fts_dim, mid_dim, rngs=rngs)
+        self.linear_4 = Linear(mid_dim, output_dim, rngs=rngs)
 
     def __call__(self, h_t: jax.Array, edge_fts: jax.Array) -> Array:
         p_1, p_2, p_3 = self.linear_1(h_t), self.linear_2(h_t), self.linear_3(edge_fts)
@@ -129,9 +147,9 @@ class EdgeFeatureDecoder(Decoder):
         edge_fts_dim: int,
     ):
         super().__init__()
-        self.linear_1 = nnx.Linear(h_t_dim, output_dim1, rngs=rngs)
-        self.linear_2 = nnx.Linear(h_t_dim, output_dim2, rngs=rngs)
-        self.linear_3 = nnx.Linear(edge_fts_dim, output_dim3, rngs=rngs)
+        self.linear_1 = Linear(h_t_dim, output_dim1, rngs=rngs)
+        self.linear_2 = Linear(h_t_dim, output_dim2, rngs=rngs)
+        self.linear_3 = Linear(edge_fts_dim, output_dim3, rngs=rngs)
 
     def __call__(self, h_t: Array, edge_fts: Array) -> tuple[Array, Array, Array]:
         pred_1 = self.linear_1(h_t)
@@ -150,11 +168,11 @@ class EdgePointerDecoder(Decoder):
         output_dim: int,
     ):
         super().__init__()
-        self.linear_1 = nnx.Linear(h_t_dim, mid_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(h_t_dim, mid_dim, rngs=rngs)
-        self.linear_3 = nnx.Linear(edge_fts_dim, mid_dim, rngs=rngs)
-        self.linear_4 = nnx.Linear(h_t_dim, mid_dim, rngs=rngs)
-        self.linear_5 = nnx.Linear(mid_dim, output_dim, rngs=rngs)
+        self.linear_1 = Linear(h_t_dim, mid_dim, rngs=rngs)
+        self.linear_2 = Linear(h_t_dim, mid_dim, rngs=rngs)
+        self.linear_3 = Linear(edge_fts_dim, mid_dim, rngs=rngs)
+        self.linear_4 = Linear(h_t_dim, mid_dim, rngs=rngs)
+        self.linear_5 = Linear(mid_dim, output_dim, rngs=rngs)
 
     def __call__(self, h_t: Array, edge_fts: Array) -> Array:
         pred_1 = self.linear_1(h_t)
@@ -179,8 +197,8 @@ class GraphFeatureDecoder(Decoder):
         graph_fts_dim: int,
     ):
         super().__init__()
-        self.linear_1 = nnx.Linear(gr_emb_dim, output_dim1, rngs=rngs)
-        self.linear_2 = nnx.Linear(graph_fts_dim, output_dim2, rngs=rngs)
+        self.linear_1 = Linear(gr_emb_dim, output_dim1, rngs=rngs)
+        self.linear_2 = Linear(graph_fts_dim, output_dim2, rngs=rngs)
 
     def __call__(self, gr_emb: jax.Array, graph_fts: jax.Array) -> tuple[Array, Array]:
         emb_value = self.linear_1(gr_emb)
@@ -198,9 +216,9 @@ class GraphPointerDecoder(Decoder):
         mid_dim: int,
     ):
         super().__init__()
-        self.linear_1 = nnx.Linear(gr_emb_dim, mid_dim, rngs=rngs)
-        self.linear_2 = nnx.Linear(graph_fts_dim, mid_dim, rngs=rngs)
-        self.linear_3 = nnx.Linear(mid_dim, output_dim, rngs=rngs)
+        self.linear_1 = Linear(gr_emb_dim, mid_dim, rngs=rngs)
+        self.linear_2 = Linear(graph_fts_dim, mid_dim, rngs=rngs)
+        self.linear_3 = Linear(mid_dim, output_dim, rngs=rngs)
 
     def __call__(self, gr_emb: Array, graph_fts: Array) -> tuple[Array, Array, Array]:
         pred_n = self.linear_1(gr_emb)
@@ -224,7 +242,7 @@ def construct_decoders_flax(
         edge_fts_dim = hidden_dim
     gr_emb_dim = 3 * hidden_dim
     graph_fts_dim = hidden_dim
-    # linear = lambda out_dims: nnx.Linear(hidden_dim, out_dims, rngs=rngs)
+    # linear = lambda out_dims: Linear(hidden_dim, out_dims, rngs=rngs)
     if loc == _Location.NODE:
         # Node decoders.
         if t in [_Type.SCALAR, _Type.MASK, _Type.MASK_ONE]:
