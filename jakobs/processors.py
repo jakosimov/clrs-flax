@@ -767,20 +767,12 @@ class MessageWeightMLP(nnx.Module):
         constant_init: float | None = None,
     ):
         super().__init__()
-        self.layer1 = nnx.Linear(
-            in_size,
-            n_aggregation_methods,
-            rngs=rngs,
-            kernel_init=jax.nn.initializers.variance_scaling(
-                mode="fan_in", distribution="truncated_normal", scale=0.1
-            ),
-        )
         # self.layer2 = nnx.Linear(
         #     out_size, out_size, rngs=rngs, bias_init=jax.nn.initializers.constant(50.0)
         # )
         if constant_init is not None:
             self.layer2 = nnx.Linear(
-                n_aggregation_methods,
+                in_size,
                 n_aggregation_methods,
                 rngs=rngs,
                 bias_init=jax.nn.initializers.constant(constant_init),
@@ -789,13 +781,11 @@ class MessageWeightMLP(nnx.Module):
                 ),
             )
         else:
-            self.layer2 = nnx.Linear(
-                n_aggregation_methods, n_aggregation_methods, rngs=rngs
-            )
+            self.layer2 = nnx.Linear(in_size, n_aggregation_methods, rngs=rngs)
 
     def __call__(self, z: Array) -> Array:
         """Compute message weights."""
-        return self.layer2(jax.nn.relu(self.layer1(z)))  # Apply MLP to compute weights
+        return self.layer2(z)  # Apply MLP to compute weights
 
 
 class PointwiseMessageWeightMLP(nnx.Module):
@@ -813,17 +803,9 @@ class PointwiseMessageWeightMLP(nnx.Module):
         self.n_aggregation_methods = n_aggregation_methods
         self.in_size = in_size
         self.out_size = out_size
-        self.layer1 = nnx.Linear(
-            in_size,
-            n_aggregation_methods * out_size,
-            rngs=rngs,
-            kernel_init=jax.nn.initializers.variance_scaling(
-                mode="fan_in", distribution="truncated_normal", scale=0.1
-            ),
-        )
         if constant_init is not None:
             self.layer2 = nnx.Linear(
-                n_aggregation_methods * out_size,
+                in_size,
                 n_aggregation_methods * out_size,
                 rngs=rngs,
                 bias_init=jax.nn.initializers.constant(constant_init),
@@ -833,16 +815,14 @@ class PointwiseMessageWeightMLP(nnx.Module):
             )
         else:
             self.layer2 = nnx.Linear(
-                n_aggregation_methods * out_size,
+                in_size,
                 n_aggregation_methods * out_size,
                 rngs=rngs,
             )
 
     def __call__(self, z: Array) -> Array:
         """Compute message weights."""
-        x = self.layer1(z)  # (B, N, n_aggregation_methods)
-        x = jax.nn.relu(x)
-        x = self.layer2(x)  # (B, N, n_aggregation_methods * out_size)
+        x = self.layer2(z)  # (B, N, n_aggregation_methods * out_size)
         x = jnp.reshape(
             x, (x.shape[0], x.shape[1], self.out_size, self.n_aggregation_methods)
         )
