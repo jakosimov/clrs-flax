@@ -904,6 +904,7 @@ class PGN(Processor):
         self.single_message = single_message
         self.dropout_rate = dropout_rate
         self.sigmoid_message_weights = sigmoid_message_weights
+        self.constant_aggregation_weight_init = constant_aggregation_weight_init
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -1075,8 +1076,15 @@ class PGN(Processor):
 
         if self.sigmoid_message_weights:
             # Apply sigmoid to the weights
-            weights = jax.nn.sigmoid(2 * weights)
-        elif self.aggregation_weight_softmax:
+            weight_init = (
+                self.constant_aggregation_weight_init
+                if self.constant_aggregation_weight_init is not None
+                else 0.0
+            )
+            weights = jax.nn.sigmoid(
+                weights - weight_init
+            )  # (B, N, H, R) or (1, 1, H, R)
+        else:
             if rng_key is not None and self.msg_weight_gumbel:
                 # Apply Gumbel noise to the weights if specified
                 weights += jax.random.gumbel(key=rng_key, shape=weights.shape)
