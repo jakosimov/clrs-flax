@@ -225,6 +225,9 @@ class MPNNConfig:
     message_weight_lr: float = 1e-3
     state_dropout_prob: float = 0.0
     msg_dropout_prob: float = 0.0  # Dropout probability for messages
+    sigmoid_message_weights: bool = (
+        False  # If True, use sigmoid activation for message weights
+    )
 
 
 def make_mpnn_processor_factory(
@@ -245,7 +248,8 @@ def make_mpnn_processor_factory(
     per_node_agg_weights: bool,
     point_wise_softmax: bool,
     single_message: bool,
-    dropout_rate: float = 0.0,
+    dropout_rate: float,
+    sigmoid_message_weights: bool,
 ):
     def _factory(out_size: int, rngs: nnx.Rngs):
         return processors.MPNN(
@@ -270,6 +274,7 @@ def make_mpnn_processor_factory(
             point_wise_softmax=point_wise_softmax,
             single_message=single_message,
             dropout_rate=dropout_rate,
+            sigmoid_message_weights=sigmoid_message_weights,
         )
 
     return _factory
@@ -295,6 +300,7 @@ def make_mpnn_model(mpnn_config: MPNNConfig, dataset: DatasetConfig):
         point_wise_softmax=mpnn_config.point_wise_softmax,
         single_message=mpnn_config.single_message,
         dropout_rate=mpnn_config.msg_dropout_prob,
+        sigmoid_message_weights=mpnn_config.sigmoid_message_weights,
     )
 
     rngs = nnx.Rngs(params=10, dropout=random.key(1))
@@ -366,6 +372,7 @@ def _initialize_wandb(
         "grad_clipping": mpnn_config.grad_clipping,
         "point_wise_softmax": mpnn_config.point_wise_softmax,
         "single_message": mpnn_config.single_message,
+        "sigmoid_message_weights": mpnn_config.sigmoid_message_weights,
     }
     wandb.init(
         project=project_name,

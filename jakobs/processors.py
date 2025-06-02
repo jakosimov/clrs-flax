@@ -879,6 +879,7 @@ class PGN(Processor):
         point_wise_softmax: bool = False,
         single_message: bool = False,
         dropout_rate: float = 0.0,
+        sigmoid_message_weights: bool = False,
         name: str = "mpnn_aggr",
     ):
         super().__init__(name=name)
@@ -902,6 +903,7 @@ class PGN(Processor):
         self.point_wise_softmax = point_wise_softmax
         self.single_message = single_message
         self.dropout_rate = dropout_rate
+        self.sigmoid_message_weights = sigmoid_message_weights
 
         hidden_size = self.mid_size
         edge_fts_size = self.mid_size
@@ -1071,7 +1073,10 @@ class PGN(Processor):
             else:
                 weights = weights[None, None, None, :]  # (1, 1, 1, R)
 
-        if self.aggregation_weight_softmax:
+        if self.sigmoid_message_weights:
+            # Apply sigmoid to the weights
+            weights = jax.nn.sigmoid(2 * weights)
+        elif self.aggregation_weight_softmax:
             if rng_key is not None and self.msg_weight_gumbel:
                 # Apply Gumbel noise to the weights if specified
                 weights += jax.random.gumbel(key=rng_key, shape=weights.shape)
